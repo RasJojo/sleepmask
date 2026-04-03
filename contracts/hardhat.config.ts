@@ -38,3 +38,4 @@ const config: HardhatUserConfig = {
 };
 
 export default config;
+// Hardhat config
