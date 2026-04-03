@@ -18,3 +18,4 @@ function App(): React.JSX.Element {
 }
 
 export default App;
+// React Native app
