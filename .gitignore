@@ -1,0 +1,33 @@
+# Secrets
+.env
+
+# Node
+node_modules/
+dist/
+*.js.map
+
+# TypeScript
+*.tsbuildinfo
+
+# Hardhat
+artifacts/
+cache/
+typechain-types/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+*.g.dart
+*.freezed.dart
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
