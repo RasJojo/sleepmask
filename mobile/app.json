@@ -1,4 +1,15 @@
 {
+  "expo": {
+    "name": "sleepmask",
+    "slug": "sleepmask",
+    "scheme": "sleepmask",
+    "android": {
+      "package": "com.mobile"
+    },
+    "ios": {
+      "bundleIdentifier": "com.mobile"
+    }
+  },
   "name": "sleepmask",
   "displayName": "Sleepmask"
 }

@@ -11,6 +11,7 @@ import { createPublicClient, http } from "viem";
 import { baseSepolia } from "viem/chains";
 
 const router = Router();
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 // ─── Helper : attend la confirmation d'une tx ─────────────────────────────────
 
@@ -20,6 +21,20 @@ async function waitForTx(hash: `0x${string}`) {
     transport: http(process.env.RPC_URL || "https://sepolia.base.org"),
   });
   return publicClient.waitForTransactionReceipt({ hash });
+}
+
+async function waitForBurnerAddress(requestId: `0x${string}`, timeoutMs = 20000, intervalMs = 1500) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const burnerAddress = await getBurnerAddress(requestId);
+    if (burnerAddress !== ZERO_ADDRESS) {
+      return burnerAddress;
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error("Timeout de synchronisation RPC sur le burner");
 }
 
 // ─── POST /api/pay ────────────────────────────────────────────────────────────
@@ -68,7 +83,7 @@ router.post("/pay", async (req: Request, res: Response) => {
     await waitForTx(txHash);
 
     // 3. Récupère l'adresse BurnerA générée par le contrat
-    const burnerAddress = await getBurnerAddress(requestId as `0x${string}`);
+    const burnerAddress = await waitForBurnerAddress(requestId as `0x${string}`);
 
     // 4. Dérive le mnémonique Unlink de BurnerA depuis son adresse CREATE2
     //    Déterministe : même input → même mnémonique. Jamais stocké.

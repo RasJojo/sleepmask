@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { createPublicClient, http, parseAbi } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 
 import payRouter from "./routes/pay.js";
@@ -54,8 +55,46 @@ const ERC20_TRANSFER_ABI = parseAbi([
   "function transfer(address to, uint256 amount) returns (bool)",
 ]);
 
+const pendingReceiveNotifications = new Set<string>();
+
+function getRpcUrl() {
+  return process.env.RPC_URL || "https://sepolia.base.org";
+}
+
+function getRelayerAccount() {
+  const rawKey = process.env.EVM_PRIVATE_KEY!;
+  const privateKey = (rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`) as `0x${string}`;
+  return privateKeyToAccount(privateKey);
+}
+
+async function sweepOneshotToRelayer(requestId: string, amount: bigint) {
+  const rpcUrl = getRpcUrl();
+  const usdcAddress = (process.env.USDC_TOKEN || USDC_TOKEN) as `0x${string}`;
+  const publicClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http(rpcUrl),
+  });
+  const oneshotAccount = deriveOneshotAccount(requestId);
+  const relayerAccount = getRelayerAccount();
+
+  const oneshotWallet = createWalletClient({
+    account: oneshotAccount,
+    chain: baseSepolia,
+    transport: http(rpcUrl),
+  });
+
+  const txHash = await oneshotWallet.writeContract({
+    address: usdcAddress,
+    abi: ERC20_TRANSFER_ABI,
+    functionName: "transfer",
+    args: [relayerAccount.address, amount],
+  });
+
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+}
+
 function startCas3Watcher() {
-  const rpcUrl      = process.env.RPC_URL || "https://sepolia.base.org";
+  const rpcUrl      = getRpcUrl();
   const publicClient = createPublicClient({ chain: baseSepolia, transport: http(rpcUrl) });
   const usdcAddress  = (process.env.USDC_TOKEN || USDC_TOKEN) as `0x${string}`;
 
@@ -70,44 +109,23 @@ function startCas3Watcher() {
         if (!to || !value) continue;
 
         // Cherche si cette adresse est un one-shot connu
-        for (const [requestId, { unlinkAddress, token }] of receiveStore.entries()) {
+        for (const [requestId] of receiveStore.entries()) {
           const oneshotAccount = deriveOneshotAccount(requestId);
           if (oneshotAccount.address.toLowerCase() !== to.toLowerCase()) continue;
 
           console.log(`[Cas 3] Fonds détectés au one-shot ${to} pour ${requestId}`);
 
+          if (pendingReceiveNotifications.has(requestId)) {
+            break;
+          }
+
           try {
-            // Notifie le contrat (vérifie le solde on-chain)
+            pendingReceiveNotifications.add(requestId);
+
+            // Notifie le contrat ; le watcher FundsReceived se charge du sweep réel.
             await notifyReceivedOnChain(requestId as `0x${string}`, value);
-
-            // Sweep : one-shot → relayer EVM
-            const oneshotWallet = createWalletClient({
-              account:   oneshotAccount,
-              chain:     baseSepolia,
-              transport: http(rpcUrl),
-            });
-            await oneshotWallet.writeContract({
-              address:      usdcAddress,
-              abi:          ERC20_TRANSFER_ABI,
-              functionName: "transfer",
-              args:         [oneshotAccount.address, value], // sera remplacé par l'adresse relayer
-            });
-
-            // Deposit dans Unlink depuis le relayer
-            const relayerMnemonic = deriveRelayerMnemonic();
-            await deposit(relayerMnemonic, value.toString(), token);
-
-            // Transfer Unlink relayer → Alice
-            await transfer(relayerMnemonic, unlinkAddress, value.toString(), token);
-
-            // Marque payé on-chain
-            await markPaidOnChain(requestId as `0x${string}`, value);
-
-            // Nettoie le store
-            receiveStore.delete(requestId);
-
-            console.log(`[Cas 3] Paiement finalisé pour ${requestId}`);
           } catch (err: any) {
+            pendingReceiveNotifications.delete(requestId);
             console.error(`[Cas 3] Erreur pour ${requestId}:`, err?.message || err);
           }
           break;
@@ -130,12 +148,16 @@ function startFundsReceivedWatcher() {
     if (!entry) return; // déjà traité par le watcher ERC20
 
     try {
+      await sweepOneshotToRelayer(requestId, amount);
+
       const relayerMnemonic = deriveRelayerMnemonic();
       await deposit(relayerMnemonic, amount.toString(), entry.token);
       await transfer(relayerMnemonic, entry.unlinkAddress, amount.toString(), entry.token);
       await markPaidOnChain(requestId, amount);
       receiveStore.delete(requestId);
+      pendingReceiveNotifications.delete(requestId);
     } catch (err: any) {
+      pendingReceiveNotifications.delete(requestId);
       console.error(`[FundsReceived] Erreur:`, err?.message || err);
     }
   });
@@ -144,7 +166,7 @@ function startFundsReceivedWatcher() {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`Sleepay backend running on http://localhost:${PORT}`);
+  console.log(`Sleepmask backend running on http://localhost:${PORT}`);
 
   if (process.env.CONTRACT_ADDRESS) {
     startCas3Watcher();

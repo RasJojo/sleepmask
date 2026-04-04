@@ -63,11 +63,13 @@ export function buildUnlinkClient(mnemonic: string) {
 
 export async function getBalance(mnemonic: string) {
   const client = buildUnlinkClient(mnemonic);
+  await client.ensureRegistered();
   return client.getBalances();
 }
 
 export async function deposit(mnemonic: string, amount: string, token = USDC_TOKEN) {
   const client = buildUnlinkClient(mnemonic);
+  await client.ensureRegistered();
   await client.ensureErc20Approval({ token, amount });
   return client.deposit({ token, amount });
 }
@@ -79,6 +81,7 @@ export async function transfer(
   token = USDC_TOKEN
 ) {
   const client = buildUnlinkClient(mnemonic);
+  await client.ensureRegistered();
   const tx = await client.transfer({ recipientAddress: recipientUnlinkAddress, amount, token });
   await client.pollTransactionStatus(tx.txId);
   return tx;
@@ -86,6 +89,7 @@ export async function transfer(
 
 export async function withdraw(mnemonic: string, toEvm: string, amount: string, token = USDC_TOKEN) {
   const client = buildUnlinkClient(mnemonic);
+  await client.ensureRegistered();
   const tx = await client.withdraw({ token, amount, recipientEvmAddress: toEvm });
   await client.pollTransactionStatus(tx.txId);
   return tx;
@@ -93,5 +97,6 @@ export async function withdraw(mnemonic: string, toEvm: string, amount: string, 
 
 export async function getUnlinkAddress(mnemonic: string): Promise<string> {
   const client = buildUnlinkClient(mnemonic);
+  await client.ensureRegistered();
   return client.getAddress();
 }

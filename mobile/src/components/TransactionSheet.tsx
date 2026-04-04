@@ -178,13 +178,13 @@ export function TransactionSheet({
                   : 'La réception apparaît.'}
               </Text>
               <Text style={styles.successText}>
-                Le flux reste simple, calme et entièrement mocké pour ce
-                prototype.
+                La confirmation est finalisée. Les détails sensibles restent
+                discrets, puis sont révélés au bon moment.
               </Text>
             </View>
           ) : (
             <Text style={styles.pendingFootnote}>
-              Confirmation simulée en cours.
+              Confirmation réseau en cours.
             </Text>
           )}
         </Animated.View>

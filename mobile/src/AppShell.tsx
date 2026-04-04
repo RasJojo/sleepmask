@@ -1,17 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
+import Clipboard from '@react-native-clipboard/clipboard';
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -20,12 +23,18 @@ import {
 import { BalanceRevealCard } from './components/BalanceRevealCard';
 import { BottomTabs } from './components/BottomTabs';
 import { QrCodeMock } from './components/QrCodeMock';
+import { QrScannerModal } from './components/QrScannerModal';
 import { SegmentedControl } from './components/SegmentedControl';
 import { SleepMaskMark } from './components/SleepMaskMark';
 import { StatusPill } from './components/StatusPill';
 import { TransactionSheet } from './components/TransactionSheet';
-import { activity, holdings, profileSummary } from './data/mock';
+import type { ActivityItem, Holding } from './types';
 import { colors, radius, shadows } from './theme';
+import { useIdentity } from './hooks/useIdentity';
+import { useBalance } from './hooks/useBalance';
+import { useDeposit } from './hooks/useDeposit';
+import { usePayment } from './hooks/usePayment';
+import { useReceive } from './hooks/useReceive';
 
 type Stage = 'splash' | 'login' | 'app';
 type TabKey = 'home' | 'transfer' | 'profile';
@@ -44,36 +53,115 @@ export function AppShell() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const compact = width < 390 || height < 760;
+
+  // ── Identité Sleepmask (mnémonique local BIP39) ───────────────────────────
+  const {
+    mnemonic,
+    wallet,
+    connectionMethod,
+    loading: identityLoading,
+    error: identityError,
+    initialize: initIdentity,
+    connectWithEmail,
+    logout: logoutIdentity,
+  } = useIdentity();
+
+  // ── Balance Unlink ────────────────────────────────────────────────────────
+  const {
+    balance,
+    holdings,
+    activity,
+    walletAddress,
+    unlinkAddress,
+    refresh: refreshBalance,
+  } = useBalance(mnemonic, wallet);
+
+  // ── Paiement ──────────────────────────────────────────────────────────────
+  const { status: payStatus, error: payError, payRequest, reset: resetPay } = usePayment(mnemonic);
+
+  // ── Dépôt wallet public → rail privé ─────────────────────────────────────
+  const {
+    status: depositStatus,
+    error: depositError,
+    deposit,
+    reset: resetDeposit,
+  } = useDeposit(mnemonic, wallet);
+
+  // ── Réception ─────────────────────────────────────────────────────────────
+  const {
+    status: receiveStatus,
+    request: receiveRequest,
+    createRequest,
+    reset: resetReceive,
+  } = useReceive(unlinkAddress);
+
+  // ── UI state ──────────────────────────────────────────────────────────────
   const [stage, setStage] = useState<Stage>('splash');
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [transferMode, setTransferMode] = useState<TransferMode>('pay');
   const [balanceMasked, setBalanceMasked] = useState(true);
-  const [payAmount, setPayAmount] = useState('48,00');
-  const [payRecipient, setPayRecipient] = useState('Atelier Saint-Honore');
-  const [receiveAmount, setReceiveAmount] = useState('24,00');
+  const [payAmount, setPayAmount] = useState('');
+  const [payRecipient, setPayRecipient] = useState('');
+  const [payLinkInput, setPayLinkInput] = useState('');
+  const [depositAmount, setDepositAmount] = useState('');
+  const [receiveAmount, setReceiveAmount] = useState('');
   const [flexibleReceive, setFlexibleReceive] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
 
+  // QR parsé après scan
+  const [parsedRequestId, setParsedRequestId] = useState<string | null>(null);
+  const [parsedRecipient, setParsedRecipient] = useState<string | null>(null);
+
+  // ── Auto-transition login → app quand l'identité est prête ──────────────
   useEffect(() => {
-    if (!modal || modal.type !== 'transaction' || modal.phase !== 'pending') {
+    if (mnemonic && stage === 'login') {
+      setStage('app');
+      refreshBalance();
+    }
+  }, [mnemonic, stage, refreshBalance]);
+
+  // ── Transition modale paiement : pending → success quand payStatus = success
+  useEffect(() => {
+    if (payStatus === 'success' && modal?.type === 'transaction' && modal.phase === 'pending') {
+      setModal({ type: 'transaction', phase: 'success', variant: 'pay' });
+      refreshBalance();
+      resetPay();
+    }
+    if (payStatus === 'error' && payError) {
+      Alert.alert('Paiement échoué', payError);
+      setModal(null);
+      resetPay();
+    }
+  }, [payStatus, payError, modal, refreshBalance, resetPay]);
+
+  useEffect(() => {
+    if (depositStatus === 'success') {
+      Alert.alert('Dépôt confirmé', 'Les USDC ont été ajoutés au rail privé.');
+      setDepositAmount('');
+      refreshBalance();
+      resetDeposit();
       return;
     }
 
-    const timeout = setTimeout(() => {
-      setModal({
-        type: 'transaction',
-        phase: 'success',
-        variant: modal.variant,
-      });
-    }, 2400);
+    if (depositStatus === 'error' && depositError) {
+      Alert.alert('Dépôt échoué', depositError);
+      resetDeposit();
+    }
+  }, [depositError, depositStatus, refreshBalance, resetDeposit]);
 
-    return () => clearTimeout(timeout);
-  }, [modal]);
+  // ── Transition modale réception : paid → succès
+  useEffect(() => {
+    if (receiveStatus === 'paid') {
+      setModal({ type: 'transaction', phase: 'success', variant: 'receive' });
+      refreshBalance();
+      resetReceive();
+    }
+  }, [receiveStatus, refreshBalance, resetReceive]);
 
   const transactionCounterparty = useMemo(() => {
     return modal?.type === 'transaction' && modal.variant === 'receive'
       ? 'Paiement Sleepmask'
-      : payRecipient;
+      : payRecipient || 'Destinataire';
   }, [modal, payRecipient]);
 
   const openPay = () => {
@@ -82,62 +170,171 @@ export function AppShell() {
   };
 
   const openReceive = () => {
+    resetReceive();
     setActiveTab('transfer');
     setTransferMode('receive');
   };
 
-  const showScanDemo = () => {
-    setPayRecipient('Atelier Saint-Honore');
-    setPayAmount('48,00');
-    setTransferMode('pay');
-    setModal(null);
+  // Parse un deep link Sleepmask / Sleepay.
+  const handleQrScanned = useCallback((qrData: string) => {
+    try {
+      const url = new URL(qrData);
+      const requestId = url.searchParams.get('requestId');
+      const amount    = url.searchParams.get('amount');
+      const recipient = url.searchParams.get('recipient');
+
+      if (requestId) setParsedRequestId(requestId);
+      if (recipient) setParsedRecipient(decodeURIComponent(recipient));
+      if (amount) setPayAmount((parseInt(amount, 10) / 1_000_000).toFixed(2));
+      if (recipient && !payRecipient) {
+        setPayRecipient('Paiement Sleepmask');
+      }
+
+      setTransferMode('pay');
+      setModal(null);
+    } catch {
+      Alert.alert('QR invalide', 'Ce QR code n\'est pas compatible Sleepmask.');
+    }
+  }, [payRecipient]);
+
+  useEffect(() => {
+    Linking.getInitialURL().then(url => {
+      if (url) {
+        handleQrScanned(url);
+      }
+    }).catch(() => undefined);
+
+    const subscription = Linking.addEventListener('url', event => {
+      handleQrScanned(event.url);
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [handleQrScanned]);
+
+  const parsePayLink = () => {
+    if (!payLinkInput.trim()) {
+      Alert.alert('Lien requis', 'Collez un lien Sleepmask valide.');
+      return;
+    }
+
+    handleQrScanned(payLinkInput.trim());
   };
 
-  const pasteDemoLink = () => {
-    setPayRecipient('Le Comptoir Calme');
-    setPayAmount('18,50');
-    Alert.alert(
-      'Lien mock collé',
-      'Les champs de paiement ont été préremplis.',
+  const startPayment = async () => {
+    if (!mnemonic) { Alert.alert('Erreur', 'Identité non prête'); return; }
+
+    const amountMicro = Math.round(
+      parseFloat((payAmount || '0').replace(',', '.')) * 1_000_000,
     );
-  };
 
-  const startPayment = () => {
-    setModal({
-      type: 'transaction',
-      phase: 'pending',
-      variant: 'pay',
+    if (!Number.isFinite(amountMicro) || amountMicro <= 0) {
+      Alert.alert('Montant invalide', 'Saisissez un montant USDC valide.');
+      return;
+    }
+
+    if (!parsedRequestId || !parsedRecipient) {
+      Alert.alert(
+        'Request requise',
+        'Chargez un QR ou un lien Sleepmask valide avant de confirmer.',
+      );
+      return;
+    }
+
+    setModal({ type: 'transaction', phase: 'pending', variant: 'pay' });
+
+    await payRequest({
+      requestId: parsedRequestId,
+      recipientUnlinkAddress: parsedRecipient,
+      amount: amountMicro.toString(),
+      localTag: payRecipient || 'Paiement Sleepmask',
     });
   };
 
-  const startReceiveSimulation = () => {
-    setModal({
-      type: 'transaction',
-      phase: 'pending',
-      variant: 'receive',
+  const generateReceiveRequest = async () => {
+    if (!unlinkAddress) {
+      Alert.alert('Adresse indisponible', 'Votre adresse privée n’est pas encore prête.');
+      return;
+    }
+
+    if (!flexibleReceive) {
+      const amountMicro = Math.round(
+        parseFloat((receiveAmount || '0').replace(',', '.')) * 1_000_000,
+      );
+
+      if (!Number.isFinite(amountMicro) || amountMicro <= 0) {
+        Alert.alert('Montant invalide', 'Saisissez un montant USDC valide.');
+        return;
+      }
+
+      await createRequest({
+        amount: amountMicro.toString(),
+        flexibleAmount: false,
+      });
+      return;
+    }
+
+    await createRequest({
+      amount: '0',
+      flexibleAmount: true,
     });
   };
 
-  const handleLogout = () => {
+  const startDeposit = async () => {
+    const amountMicro = Math.round(
+      parseFloat((depositAmount || '0').replace(',', '.')) * 1_000_000,
+    );
+
+    if (!Number.isFinite(amountMicro) || amountMicro <= 0) {
+      Alert.alert('Montant invalide', 'Saisissez un montant USDC valide.');
+      return;
+    }
+
+    await deposit(amountMicro.toString(), 'USDC');
+  };
+
+  const handleLogout = async () => {
+    await logoutIdentity();
     setStage('login');
     setActiveTab('home');
     setTransferMode('pay');
     setModal(null);
+    resetPay();
+    resetReceive();
   };
+
+  // Solde formaté pour l'affichage
+  const formattedBalance = useMemo(() => {
+    if (!balance?.balances?.length) return undefined;
+    const usdc =
+      balance.balances.find(b => b.token?.toLowerCase().includes('usdc')) ??
+      balance.balances[0];
+    if (!usdc) return undefined;
+    const amount = (parseInt(usdc.amount, 10) / 1_000_000).toFixed(2);
+    return `${amount} USDC`;
+  }, [balance]);
 
   const transactionAmount =
     modal?.type === 'transaction' && modal.variant === 'receive'
       ? flexibleReceive
         ? 'Libre'
-        : receiveAmount || '24,00'
-      : payAmount || '48,00';
+        : receiveAmount || '0,00'
+      : payAmount || '0,00';
 
   return (
     <>
       {stage === 'splash' ? (
         <SplashScreen compact={compact} onContinue={() => setStage('login')} />
       ) : stage === 'login' ? (
-        <LoginScreen compact={compact} onConnect={() => setStage('app')} />
+        <LoginScreen
+          compact={compact}
+          connectionMethod={connectionMethod}
+          loading={identityLoading}
+          error={identityError}
+          onConnect={initIdentity}
+          onConnectWithEmail={connectWithEmail}
+        />
       ) : (
         <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
           <KeyboardAvoidingView
@@ -149,7 +346,13 @@ export function AppShell() {
                 <HomeTab
                   compact={compact}
                   balanceMasked={balanceMasked}
+                  balance={formattedBalance}
+                  holdings={holdings}
+                  activity={activity}
+                  depositAmount={depositAmount}
                   onToggleBalance={() => setBalanceMasked(current => !current)}
+                  onChangeDepositAmount={setDepositAmount}
+                  onDeposit={startDeposit}
                   onOpenPay={openPay}
                   onOpenReceive={openReceive}
                   onOpenProfile={() => setActiveTab('profile')}
@@ -163,29 +366,49 @@ export function AppShell() {
                   }
                   payAmount={payAmount}
                   payRecipient={payRecipient}
+                  payLinkInput={payLinkInput}
                   receiveAmount={receiveAmount}
                   flexibleReceive={flexibleReceive}
                   onChangePayAmount={setPayAmount}
                   onChangePayRecipient={setPayRecipient}
+                  onChangePayLink={setPayLinkInput}
                   onChangeReceiveAmount={setReceiveAmount}
                   onToggleFlexibleReceive={setFlexibleReceive}
                   onOpenScan={() => setModal({ type: 'scan' })}
-                  onPasteDemo={pasteDemoLink}
+                  onParsePayLink={parsePayLink}
                   onStartPayment={startPayment}
-                  onOpenFullQr={() => setModal({ type: 'fullQr' })}
-                  onCopyLink={() =>
-                    Alert.alert('Lien copié', 'Lien de réception mock copié.')
+                  onGenerateReceive={generateReceiveRequest}
+                  onOpenFullQr={() =>
+                    receiveRequest
+                      ? setModal({ type: 'fullQr' })
+                      : Alert.alert('QR indisponible', 'Générez d’abord une demande de paiement.')
                   }
-                  onShare={() =>
-                    Alert.alert(
-                      'Partage mock',
-                      'La demande de paiement est prête.',
-                    )
-                  }
-                  onSimulateReceive={startReceiveSimulation}
+                  receiveQrData={receiveRequest?.qrSleepmask}
+                  onCopyLink={() => {
+                    if (!receiveRequest?.qrSleepmask) {
+                      Alert.alert('Lien indisponible', 'Générez d’abord une demande de paiement.');
+                      return;
+                    }
+                    Clipboard.setString(receiveRequest.qrSleepmask);
+                    Alert.alert('Lien copié', 'Le lien Sleepmask a été copié.');
+                  }}
+                  onShare={async () => {
+                    if (!receiveRequest?.qrSleepmask) {
+                      Alert.alert('Lien indisponible', 'Générez d’abord une demande de paiement.');
+                      return;
+                    }
+                    await Share.share({ message: receiveRequest.qrSleepmask });
+                  }}
                 />
               ) : (
-                <ProfileTab compact={compact} onLogout={handleLogout} />
+                <ProfileTab
+                  compact={compact}
+                  connectionMethod={connectionMethod}
+                  walletAddress={walletAddress}
+                  unlinkAddress={unlinkAddress}
+                  activity={activity}
+                  onLogout={handleLogout}
+                />
               )}
             </View>
 
@@ -201,20 +424,18 @@ export function AppShell() {
         </SafeAreaView>
       )}
 
-      <ScanModal
+      <QrScannerModal
         compact={compact}
         visible={modal?.type === 'scan'}
         onClose={() => setModal(null)}
-        onUseDemo={showScanDemo}
+        onQrScanned={handleQrScanned}
       />
       <FullQrModal
         compact={compact}
         visible={modal?.type === 'fullQr'}
-        amount={
-          flexibleReceive ? 'Montant libre' : `${receiveAmount || '24,00'} USDC`
-        }
+        amount={flexibleReceive ? 'Montant libre' : `${receiveAmount || '0,00'} USDC`}
+        qrData={receiveRequest?.qrSleepmask}
         onClose={() => setModal(null)}
-        onSimulateReceive={startReceiveSimulation}
       />
       <TransactionSheet
         visible={modal?.type === 'transaction'}
@@ -268,10 +489,18 @@ function SplashScreen({
 
 function LoginScreen({
   compact,
+  connectionMethod,
+  loading,
+  error,
   onConnect,
+  onConnectWithEmail,
 }: {
   compact: boolean;
+  connectionMethod: string | null;
+  loading: boolean;
+  error: string | null;
   onConnect: () => void;
+  onConnectWithEmail: () => void;
 }) {
   return (
     <SafeAreaView
@@ -290,13 +519,28 @@ function LoginScreen({
         <Text style={styles.screenText}>
           Votre wallet est prêt en arrière-plan. Simple, privé, immédiat.
         </Text>
-
+        {connectionMethod ? (
+          <Text style={styles.screenSubtext}>Dernière méthode: {connectionMethod}</Text>
+        ) : null}
         <View style={styles.authMethods}>
-          <AuthButton label="Continuer avec Google" onPress={onConnect} />
-          <AuthButton label="Continuer avec Apple" onPress={onConnect} />
-          <AuthButton label="Continuer avec email" onPress={onConnect} />
-          <AuthButton label="Continuer avec passkey" onPress={onConnect} />
+          <PrimaryButton
+            label={loading ? 'Ouverture de Dynamic…' : 'Continuer'}
+            onPress={onConnect}
+          />
+          <Text style={styles.authHelperText}>
+            Choisissez ensuite votre méthode réelle dans le modal Dynamic:
+            email, wallet externe, passkey ou provider activé côté dashboard.
+          </Text>
         </View>
+        {error ? (
+          <View style={styles.authErrorCard}>
+            <Text style={styles.authErrorTitle}>Connexion indisponible</Text>
+            <Text style={styles.authErrorText}>{error}</Text>
+          </View>
+        ) : null}
+        <Pressable onPress={onConnectWithEmail} style={styles.inlineAction}>
+          <Text style={styles.inlineActionText}>Ouvrir directement le flow email / wallet</Text>
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -305,7 +549,13 @@ function LoginScreen({
 type HomeTabProps = {
   compact: boolean;
   balanceMasked: boolean;
+  balance?: string;
+  holdings: Holding[];
+  activity: ActivityItem[];
+  depositAmount: string;
   onToggleBalance: () => void;
+  onChangeDepositAmount: (value: string) => void;
+  onDeposit: () => void;
   onOpenPay: () => void;
   onOpenReceive: () => void;
   onOpenProfile: () => void;
@@ -314,7 +564,13 @@ type HomeTabProps = {
 function HomeTab({
   compact,
   balanceMasked,
+  balance,
+  holdings,
+  activity,
+  depositAmount,
   onToggleBalance,
+  onChangeDepositAmount,
+  onDeposit,
   onOpenPay,
   onOpenReceive,
   onOpenProfile,
@@ -337,6 +593,7 @@ function HomeTab({
       <BalanceRevealCard
         compact={compact}
         masked={balanceMasked}
+        balance={balance}
         onToggle={onToggleBalance}
       />
 
@@ -344,6 +601,21 @@ function HomeTab({
         <PrimaryButton label="Payer" onPress={onOpenPay} />
         <SecondaryButton label="Recevoir" onPress={onOpenReceive} />
       </View>
+
+      <SectionBlock
+        title="Approvisionner"
+        caption="Déposez des USDC depuis le wallet public Dynamic vers le rail privé Sleepmask."
+      >
+        <InputField
+          label="Montant à déposer"
+          value={depositAmount}
+          onChangeText={onChangeDepositAmount}
+          placeholder="25,00"
+          keyboardType="decimal-pad"
+          hint="Le dépôt signe une vraie transaction depuis votre wallet public."
+        />
+        <PrimaryButton label="Déposer en USDC" onPress={onDeposit} />
+      </SectionBlock>
 
       <SectionBlock
         title="Tokens détenus"
@@ -356,7 +628,7 @@ function HomeTab({
 
       <SectionBlock
         title="Activité récente"
-        caption="Historique local au device. Les tags et repères restent dans le cache local."
+        caption="Les repères et tags restent locaux au téléphone. Les détails techniques restent secondaires."
       >
         {activity.slice(0, 3).map(item => (
           <ActivityRow key={item.id} item={item} />
@@ -375,19 +647,22 @@ type TransferTabProps = {
   onChangeMode: (nextMode: string) => void;
   payAmount: string;
   payRecipient: string;
+  payLinkInput: string;
   receiveAmount: string;
   flexibleReceive: boolean;
+  receiveQrData?: string;
   onChangePayAmount: (value: string) => void;
   onChangePayRecipient: (value: string) => void;
+  onChangePayLink: (value: string) => void;
   onChangeReceiveAmount: (value: string) => void;
   onToggleFlexibleReceive: (value: boolean) => void;
   onOpenScan: () => void;
-  onPasteDemo: () => void;
+  onParsePayLink: () => void;
   onStartPayment: () => void;
+  onGenerateReceive: () => void;
   onOpenFullQr: () => void;
   onCopyLink: () => void;
   onShare: () => void;
-  onSimulateReceive: () => void;
 };
 
 function TransferTab({
@@ -396,19 +671,22 @@ function TransferTab({
   onChangeMode,
   payAmount,
   payRecipient,
+  payLinkInput,
   receiveAmount,
   flexibleReceive,
+  receiveQrData,
   onChangePayAmount,
   onChangePayRecipient,
+  onChangePayLink,
   onChangeReceiveAmount,
   onToggleFlexibleReceive,
   onOpenScan,
-  onPasteDemo,
+  onParsePayLink,
   onStartPayment,
+  onGenerateReceive,
   onOpenFullQr,
   onCopyLink,
   onShare,
-  onSimulateReceive,
 }: TransferTabProps) {
   return (
     <ScrollView
@@ -438,19 +716,27 @@ function TransferTab({
         <>
           <SectionBlock
             title="Payer"
-            caption="Tout le flux reste simplifié autour d'un paiement USDC unique. Le destinataire n'est qu'un tag local."
+            caption="Le flux reste centré sur USDC. Le tag destinataire n'est qu'un repère local pour votre historique."
           >
             <Pressable onPress={onOpenScan} style={styles.scanCard}>
               <Text style={styles.scanTitle}>Scanner un QR code</Text>
               <Text style={styles.scanText}>
-                Ouvrir un écran de scan propre, puis remplir la demande mock.
+                Chargez une demande Sleepmask via un QR ou un lien deep link.
               </Text>
             </Pressable>
 
             <SecondaryButton
               compact
-              label="Coller un lien ou un code"
-              onPress={onPasteDemo}
+              label="Analyser le lien"
+              onPress={onParsePayLink}
+            />
+
+            <InputField
+              label="Lien ou code"
+              value={payLinkInput}
+              onChangeText={onChangePayLink}
+              placeholder="sleepmask://pay?requestId=..."
+              hint="Accepte les liens Sleepmask/Sleepay ouverts depuis un QR ou un site."
             />
 
             <InfoRail label="Paiement en USDC" />
@@ -477,7 +763,7 @@ function TransferTab({
         <>
           <SectionBlock
             title="Recevoir"
-            caption="Le QR reste central, avec un rail fixe en USDC. L'historique de réception reste local au device."
+            caption="Le QR crée une vraie demande de paiement USDC. Vos repères de réception restent locaux au téléphone."
           >
             <InfoRail label="Recevoir en USDC" />
 
@@ -512,12 +798,14 @@ function TransferTab({
             )}
 
             <View style={styles.qrCard}>
-              <QrCodeMock size={compact ? 172 : 196} />
+              <QrCodeMock size={compact ? 172 : 196} data={receiveQrData} />
               <Text style={styles.qrTitle}>Scannez pour me payer</Text>
               <Text style={styles.qrText}>
-                {flexibleReceive
-                  ? 'Paiement discret en USDC, montant libre.'
-                  : `${receiveAmount || '24,00'} USDC · Paiement discret`}
+                {receiveQrData
+                  ? flexibleReceive
+                    ? 'Paiement discret en USDC, montant libre.'
+                    : `${receiveAmount || '0,00'} USDC · Paiement discret`
+                  : 'Génération du QR en cours…'}
               </Text>
             </View>
 
@@ -540,8 +828,8 @@ function TransferTab({
               onPress={onOpenFullQr}
             />
             <PrimaryButton
-              label="Simuler une réception"
-              onPress={onSimulateReceive}
+              label={receiveQrData ? 'Régénérer le QR' : 'Générer le QR'}
+              onPress={onGenerateReceive}
             />
           </SectionBlock>
         </>
@@ -552,11 +840,25 @@ function TransferTab({
 
 function ProfileTab({
   compact,
+  connectionMethod,
+  walletAddress,
+  unlinkAddress,
+  activity,
   onLogout,
 }: {
   compact: boolean;
+  connectionMethod: string | null;
+  walletAddress: string | null;
+  unlinkAddress: string | null;
+  activity: ActivityItem[];
   onLogout: () => void;
 }) {
+  const shortAddr = walletAddress
+    ? `${walletAddress.slice(0, 6)}…${walletAddress.slice(-4)}`
+    : '—';
+  const shortUnlink = unlinkAddress
+    ? `${unlinkAddress.slice(0, 12)}…${unlinkAddress.slice(-6)}`
+    : '—';
   return (
     <ScrollView
       showsVerticalScrollIndicator={false}
@@ -574,32 +876,32 @@ function ProfileTab({
 
       <View style={[styles.profileCard, shadows.card]}>
         <SleepMaskMark size={96} />
-        <Text style={styles.profileTitle}>{profileSummary.accountLabel}</Text>
+        <Text style={styles.profileTitle}>Wallet Sleepmask</Text>
         <Text style={styles.profileText}>
-          Connexion mock via {profileSummary.connectionMethod}. Activité et tags
-          conservés localement sur ce device.
+          Identité ZK dérivée localement. Aucune donnée transmise au repos.
         </Text>
 
         <View style={styles.profileMeta}>
           <ProfileMetaRow
-            label="Moyen de connexion"
-            value={profileSummary.connectionMethod}
+            label="Connexion"
+            value={connectionMethod ?? 'Dynamic'}
           />
-          <ProfileMetaRow label="Adresse" value={profileSummary.shortAddress} />
+          <ProfileMetaRow label="Adresse EVM" value={shortAddr} />
+          <ProfileMetaRow label="Adresse Unlink" value={shortUnlink} />
         </View>
 
         <SecondaryButton
           compact
-          label="Copier l'adresse"
+          label="Copier l'adresse EVM"
           onPress={() =>
-            Alert.alert('Adresse mock copiée', profileSummary.fullAddress)
+            Alert.alert('Adresse EVM', walletAddress ?? 'Non disponible')
           }
         />
       </View>
 
       <SectionBlock
         title="Activité"
-        caption="Historique local au device, toujours sans détails techniques visibles par défaut."
+        caption="Historique enrichi localement pour garder des repères lisibles, sans bruit technique par défaut."
       >
         {activity.map(item => (
           <ActivityRow key={item.id} item={item} />
@@ -611,69 +913,20 @@ function ProfileTab({
   );
 }
 
-type ScanModalProps = {
-  compact: boolean;
-  visible: boolean;
-  onClose: () => void;
-  onUseDemo: () => void;
-};
-
-function ScanModal({ compact, visible, onClose, onUseDemo }: ScanModalProps) {
-  return (
-    <Modal transparent animationType="fade" visible={visible}>
-      <View style={styles.modalBackdrop}>
-        <View style={[styles.modalCard, shadows.floating]}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Scanner pour payer</Text>
-            <Pressable onPress={onClose}>
-              <Text style={styles.modalClose}>Fermer</Text>
-            </Pressable>
-          </View>
-          <Text style={styles.modalText}>
-            Pointez votre caméra vers le QR code. Ici, le scan reste mocké pour
-            préparer le flow.
-          </Text>
-
-          <View
-            style={[
-              styles.scannerFrame,
-              compact ? styles.scannerFrameCompact : null,
-            ]}
-          >
-            <View style={[styles.scannerCorner, styles.scannerCornerTopLeft]} />
-            <View
-              style={[styles.scannerCorner, styles.scannerCornerTopRight]}
-            />
-            <View
-              style={[styles.scannerCorner, styles.scannerCornerBottomLeft]}
-            />
-            <View
-              style={[styles.scannerCorner, styles.scannerCornerBottomRight]}
-            />
-            <SleepMaskMark size={compact ? 82 : 96} />
-          </View>
-
-          <PrimaryButton label="Utiliser un QR de démo" onPress={onUseDemo} />
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 type FullQrModalProps = {
   compact: boolean;
   visible: boolean;
   amount: string;
+  qrData?: string;
   onClose: () => void;
-  onSimulateReceive: () => void;
 };
 
 function FullQrModal({
   compact,
   visible,
   amount,
+  qrData,
   onClose,
-  onSimulateReceive,
 }: FullQrModalProps) {
   return (
     <Modal visible={visible} animationType="slide">
@@ -688,15 +941,11 @@ function FullQrModal({
           </Pressable>
         </View>
         <View style={styles.fullQrCard}>
-          <QrCodeMock size={compact ? 248 : 292} />
+          <QrCodeMock size={compact ? 248 : 292} data={qrData} />
           <Text style={styles.fullQrTitle}>Scannez pour me payer</Text>
           <Text style={styles.fullQrText}>Paiement discret avec Sleepmask</Text>
           <Text style={styles.fullQrAmount}>{amount}</Text>
         </View>
-        <PrimaryButton
-          label="Simuler un paiement entrant"
-          onPress={onSimulateReceive}
-        />
       </SafeAreaView>
     </Modal>
   );
@@ -745,26 +994,6 @@ function SecondaryButton({
   );
 }
 
-function AuthButton({
-  label,
-  onPress,
-}: {
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.authButton,
-        pressed ? styles.buttonPressed : null,
-      ]}
-    >
-      <Text style={styles.authButtonText}>{label}</Text>
-    </Pressable>
-  );
-}
-
 function SectionBlock({
   title,
   caption,
@@ -783,7 +1012,7 @@ function SectionBlock({
   );
 }
 
-function TokenRow({ item }: { item: (typeof holdings)[number] }) {
+function TokenRow({ item }: { item: Holding }) {
   return (
     <View style={[styles.listRow, item.primary ? styles.listRowPrimary : null]}>
       <View style={styles.rowLeft}>
@@ -806,7 +1035,7 @@ function TokenRow({ item }: { item: (typeof holdings)[number] }) {
   );
 }
 
-function ActivityRow({ item }: { item: (typeof activity)[number] }) {
+function ActivityRow({ item }: { item: ActivityItem }) {
   return (
     <View style={styles.listRow}>
       <View style={styles.rowLeft}>
@@ -988,24 +1217,43 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: 12,
   },
+  screenSubtext: {
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+    color: colors.textSubtle,
+    marginTop: -4,
+  },
   authMethods: {
     marginTop: 18,
     gap: 12,
   },
-  authButton: {
-    minHeight: 58,
+  authHelperText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: 8,
+  },
+  authErrorCard: {
+    marginTop: 8,
     borderRadius: radius.md,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceRaised,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
   },
-  authButtonText: {
-    fontSize: 15,
+  authErrorTitle: {
+    fontSize: 14,
     fontWeight: '700',
     color: colors.text,
+  },
+  authErrorText: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textMuted,
   },
   scrollContent: {
     paddingHorizontal: 18,

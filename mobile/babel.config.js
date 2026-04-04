@@ -1,3 +1,4 @@
 module.exports = {
-  presets: ['module:@react-native/babel-preset'],
+  presets: [['babel-preset-expo', { unstable_transformImportMeta: true }]],
+  plugins: ['@babel/plugin-transform-export-namespace-from'],
 };

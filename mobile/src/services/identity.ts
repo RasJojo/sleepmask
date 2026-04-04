@@ -1,12 +1,12 @@
-import { sha256 } from '@noble/hashes/sha256';
+import { sha256 } from '@noble/hashes/sha2.js';
 import { entropyToMnemonic } from '@scure/bip39';
-import { wordlist } from '@scure/bip39/wordlists/english';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 
 /**
  * Dérive le mnémonique Unlink depuis la signature du wallet Dynamic.
  *
  * Flow :
- *   1. Wallet Dynamic signe le message "sleepay-identity-v1"
+ *   1. Wallet Dynamic signe le message "sleepmask-identity-v1"
  *   2. SHA256(signature) → 32 bytes d'entropie
  *   3. Les 16 premiers bytes → mnémonique BIP39 12 mots (128-bit)
  *
@@ -21,7 +21,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 export async function deriveUnlinkMnemonic(
   signMessage: (message: string) => Promise<string>,
 ): Promise<string> {
-  const signature = await signMessage('sleepay-identity-v1');
+  const signature = await signMessage('sleepmask-identity-v1');
 
   // Retire le préfixe "0x" et convertit en bytes
   const sigHex   = signature.startsWith('0x') ? signature.slice(2) : signature;

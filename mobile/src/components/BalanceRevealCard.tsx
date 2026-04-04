@@ -7,12 +7,14 @@ type BalanceRevealCardProps = {
   compact: boolean;
   masked: boolean;
   onToggle: () => void;
+  balance?: string;
 };
 
 export function BalanceRevealCard({
   compact,
   masked,
   onToggle,
+  balance = '2 450,20 USDC',
 }: BalanceRevealCardProps) {
   const reveal = useRef(new Animated.Value(masked ? 0 : 1)).current;
 
@@ -72,7 +74,7 @@ export function BalanceRevealCard({
           ]}
         >
           <Text style={styles.label}>Solde privé</Text>
-          <Text style={styles.value}>2 450,20 USDC</Text>
+          <Text style={styles.value}>{balance}</Text>
           <Text style={styles.caption}>
             USDC reste le rail principal des paiements Sleepmask.
           </Text>

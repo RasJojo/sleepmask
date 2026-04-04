@@ -1,4 +1,6 @@
 import { useState, useCallback } from 'react';
+
+import { createActivityItem, pushActivity } from '../services/activity';
 import { pay, payDirect } from '../services/api';
 
 type PayStatus = 'idle' | 'pending' | 'success' | 'error';
@@ -14,15 +16,32 @@ export function usePayment(mnemonic: string | null) {
     recipientUnlinkAddress: string;
     amount:                 string;
     token?:                 string;
+    localTag?:              string;
   }) => {
     if (!mnemonic) { setError('Identité non dérivée'); return; }
     setStatus('pending');
     setError(null);
     try {
       const res = await pay({ mnemonic, ...params });
+      await pushActivity(
+        createActivityItem({
+          title: params.localTag || 'Paiement Sleepmask',
+          amountMicros: params.amount,
+          direction: 'Envoyé',
+          status: 'Terminé',
+        }),
+      );
       setTxId(res.txId);
       setStatus('success');
     } catch (e: any) {
+      await pushActivity(
+        createActivityItem({
+          title: params.localTag || 'Paiement Sleepmask',
+          amountMicros: params.amount,
+          direction: 'Envoyé',
+          status: 'Échoué',
+        }),
+      );
       setError(e?.message || 'Paiement échoué');
       setStatus('error');
     }
@@ -33,15 +52,32 @@ export function usePayment(mnemonic: string | null) {
     recipientEvmAddress: string;
     amount:              string;
     token?:              string;
+    localTag?:           string;
   }) => {
     if (!mnemonic) { setError('Identité non dérivée'); return; }
     setStatus('pending');
     setError(null);
     try {
       const res = await payDirect({ mnemonic, ...params });
+      await pushActivity(
+        createActivityItem({
+          title: params.localTag || 'Retrait vers wallet',
+          amountMicros: params.amount,
+          direction: 'Envoyé',
+          status: 'Terminé',
+        }),
+      );
       setTxId(res.txId);
       setStatus('success');
     } catch (e: any) {
+      await pushActivity(
+        createActivityItem({
+          title: params.localTag || 'Retrait vers wallet',
+          amountMicros: params.amount,
+          direction: 'Envoyé',
+          status: 'Échoué',
+        }),
+      );
       setError(e?.message || 'Paiement échoué');
       setStatus('error');
     }

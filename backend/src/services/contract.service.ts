@@ -198,6 +198,69 @@ function getContractAddress(): `0x${string}` {
   return addr as `0x${string}`;
 }
 
+let relayerNonceCursor: number | null = null;
+let relayerNonceQueue: Promise<unknown> = Promise.resolve();
+
+function resetRelayerNonceCursor() {
+  relayerNonceCursor = null;
+}
+
+async function allocateRelayerNonce() {
+  const { publicClient, account } = buildClients();
+
+  if (relayerNonceCursor === null) {
+    relayerNonceCursor = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: "pending",
+    });
+  }
+
+  const nonce = relayerNonceCursor;
+  relayerNonceCursor += 1;
+  return nonce;
+}
+
+function isNonceSyncError(error: any) {
+  const message = String(error?.message || error?.details || "");
+  return (
+    message.includes("nonce too low") ||
+    message.includes("Nonce provided for the transaction is lower") ||
+    message.includes("replacement transaction underpriced")
+  );
+}
+
+async function writeRelayerContract(
+  request: Parameters<ReturnType<typeof buildClients>["walletClient"]["writeContract"]>[0],
+  attempt = 0
+): Promise<`0x${string}`> {
+  const { walletClient, account } = buildClients();
+  const nonce = await allocateRelayerNonce();
+
+  try {
+    return await walletClient.writeContract({
+      ...request,
+      account,
+      nonce,
+    });
+  } catch (error) {
+    resetRelayerNonceCursor();
+
+    if (attempt === 0 && isNonceSyncError(error)) {
+      return writeRelayerContract(request, attempt + 1);
+    }
+
+    throw error;
+  }
+}
+
+async function queueRelayerWrite(
+  request: Parameters<ReturnType<typeof buildClients>["walletClient"]["writeContract"]>[0]
+) {
+  const task = relayerNonceQueue.then(() => writeRelayerContract(request));
+  relayerNonceQueue = task.catch(() => undefined);
+  return task;
+}
+
 // ─── Actions ─────────────────────────────────────────────────────────────────
 
 export async function createPaymentRequestOnChain(params: {
@@ -207,13 +270,11 @@ export async function createPaymentRequestOnChain(params: {
   amount:            bigint;
   ttlSeconds:        bigint;
 }) {
-  const { walletClient, account } = buildClients();
-  return walletClient.writeContract({
+  return queueRelayerWrite({
     address:      getContractAddress(),
     abi:          ABI,
     functionName: "createRequest",
     args: [params.requestId, params.unlinkAddressHash, params.token, params.amount, params.ttlSeconds],
-    account,
   });
 }
 
@@ -223,13 +284,11 @@ export async function createPaymentRequestOnChain(params: {
  * Le watcher PaymentInstructed déclenche ensuite le ZK transfer côté backend.
  */
 export async function instructPaymentOnChain(requestId: `0x${string}`, amount: bigint) {
-  const { walletClient, account } = buildClients();
-  return walletClient.writeContract({
+  return queueRelayerWrite({
     address:      getContractAddress(),
     abi:          ABI,
     functionName: "instructPayment",
     args:         [requestId, amount],
-    account,
   });
 }
 
@@ -238,13 +297,11 @@ export async function instructPaymentOnChain(requestId: `0x${string}`, amount: b
  * oneshotEVM est une adresse dérivée côté backend : keccak256(masterKey + requestId)
  */
 export async function registerOneShotOnChain(requestId: `0x${string}`, oneshotEVM: `0x${string}`) {
-  const { walletClient, account } = buildClients();
-  return walletClient.writeContract({
+  return queueRelayerWrite({
     address:      getContractAddress(),
     abi:          ABI,
     functionName: "registerOneShot",
     args:         [requestId, oneshotEVM],
-    account,
   });
 }
 
@@ -253,13 +310,11 @@ export async function registerOneShotOnChain(requestId: `0x${string}`, oneshotEV
  * Le contrat vérifie le solde ERC20 on-chain avant d'émettre FundsReceived.
  */
 export async function notifyReceivedOnChain(requestId: `0x${string}`, amount: bigint) {
-  const { walletClient, account } = buildClients();
-  return walletClient.writeContract({
+  return queueRelayerWrite({
     address:      getContractAddress(),
     abi:          ABI,
     functionName: "notifyReceived",
     args:         [requestId, amount],
-    account,
   });
 }
 
@@ -268,13 +323,11 @@ export async function notifyReceivedOnChain(requestId: `0x${string}`, amount: bi
  * Appelé après confirmation du transfert Unlink (pollTransactionStatus).
  */
 export async function markPaidOnChain(requestId: `0x${string}`, paidAmount: bigint) {
-  const { walletClient, account } = buildClients();
-  return walletClient.writeContract({
+  return queueRelayerWrite({
     address:      getContractAddress(),
     abi:          ABI,
     functionName: "markPaid",
     args:         [requestId, paidAmount],
-    account,
   });
 }
 

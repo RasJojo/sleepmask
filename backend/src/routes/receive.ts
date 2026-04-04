@@ -1,8 +1,45 @@
 import { Router, Request, Response } from "express";
-import { keccak256, toHex, encodePacked } from "viem";
-import { createPaymentRequestOnChain, registerOneShotOnChain, isPaid } from "../services/contract.service.js";
+import { createPublicClient, http, keccak256, toHex, encodePacked } from "viem";
+import { baseSepolia } from "viem/chains";
+import {
+  createPaymentRequestOnChain,
+  registerOneShotOnChain,
+  getRequest,
+  isPaid,
+} from "../services/contract.service.js";
 import { deriveOneshotAccount } from "../services/burner.service.js";
 import { USDC_TOKEN } from "../services/unlink.service.js";
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+async function waitForTx(hash: `0x${string}`) {
+  const client = createPublicClient({
+    chain: baseSepolia,
+    transport: http(process.env.RPC_URL || "https://sepolia.base.org"),
+  });
+  return client.waitForTransactionReceipt({ hash });
+}
+
+async function waitForRequestAvailability(
+  requestId: `0x${string}`,
+  predicate?: (request: Awaited<ReturnType<typeof getRequest>>) => boolean,
+  timeoutMs = 20000,
+  intervalMs = 1500,
+) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const request = await getRequest(requestId);
+
+    if (request.creator !== ZERO_ADDRESS && (!predicate || predicate(request))) {
+      return request;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error("Timeout de synchronisation RPC sur la request");
+}
 
 const router = Router();
 
@@ -42,14 +79,16 @@ router.post("/receive/create", async (req: Request, res: Response) => {
     // Hash l'adresse Unlink — jamais révélée on-chain
     const unlinkAddressHash = keccak256(toHex(unlinkAddress));
 
-    // Crée la request on-chain
-    await createPaymentRequestOnChain({
+    // Crée la request on-chain et attend la confirmation avant de continuer
+    const createTxHash = await createPaymentRequestOnChain({
       requestId,
       unlinkAddressHash,
       token:      token as `0x${string}`,
       amount:     BigInt(amount),
       ttlSeconds: BigInt(ttlSeconds),
     });
+    await waitForTx(createTxHash);
+    await waitForRequestAvailability(requestId);
 
     // Dérive l'adresse EVM one-shot pour le Cas 3 (wallet classique → Sleepmask)
     // Seul le backend peut la reconstruire (dérivée de EVM_PRIVATE_KEY + requestId)
@@ -57,13 +96,19 @@ router.post("/receive/create", async (req: Request, res: Response) => {
     const oneshotAddress = oneshotAccount.address;
 
     // Enregistre le one-shot on-chain → émet OneShotRegistered
-    await registerOneShotOnChain(requestId, oneshotAddress);
+    const registerTxHash = await registerOneShotOnChain(requestId, oneshotAddress);
+    await waitForTx(registerTxHash);
+    await waitForRequestAvailability(
+      requestId,
+      request => request.burnerAddress !== ZERO_ADDRESS,
+    );
 
     // Stocke le mapping requestId → unlinkAddress pour le sweep Cas 3
     receiveStore.set(requestId, { unlinkAddress, token });
 
-    // QR Sleepmask : requestId pour les utilisateurs Sleepmask
-    const qrSleepmask = `sleepay://pay?requestId=${requestId}&amount=${amount}&token=${token}`;
+    // QR Sleepmask : requestId + adresse Unlink d'Alice pour les utilisateurs Sleepmask
+    // L'adresse Unlink est partagée uniquement avec le payeur via le QR, jamais stockée
+    const qrSleepmask = `sleepmask://pay?requestId=${requestId}&amount=${amount}&token=${token}&recipient=${encodeURIComponent(unlinkAddress)}`;
 
     // QR classique : adresse EVM one-shot pour les wallets classiques (MetaMask, etc.)
     const qrClassic = `ethereum:${oneshotAddress}?value=0&erc20=${token}&uint256=${amount}`;

@@ -1,10 +1,12 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
 
 import { colors } from '../theme';
 
 type QrCodeMockProps = {
   size?: number;
+  data?: string;
 };
 
 function buildCells() {
@@ -47,8 +49,22 @@ function buildCells() {
   return cells;
 }
 
-export function QrCodeMock({ size = 220 }: QrCodeMockProps) {
-  const cells = useMemo(buildCells, []);
+export function QrCodeMock({ size = 220, data }: QrCodeMockProps) {
+  const cells = useMemo(() => buildCells(), []);
+
+  if (data) {
+    return (
+      <View style={[styles.frame, styles.realQrFrame, { width: size, height: size }]}>
+        <QRCode
+          value={data}
+          size={size - 28}
+          backgroundColor={colors.surfaceRaised}
+          color={colors.black}
+        />
+      </View>
+    );
+  }
+
   const dimension = 21;
   const padding = 14;
   const cellSize = Math.floor((size - padding * 2) / dimension);
@@ -70,6 +86,7 @@ export function QrCodeMock({ size = 220 }: QrCodeMockProps) {
           />
         ))}
       </View>
+      {!data ? <Text style={styles.placeholderText}>QR en préparation</Text> : null}
     </View>
   );
 }
@@ -80,6 +97,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  realQrFrame: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
   },
   grid: {
     flex: 1,
@@ -94,5 +116,12 @@ const styles = StyleSheet.create({
   },
   cellEmpty: {
     backgroundColor: 'transparent',
+  },
+  placeholderText: {
+    position: 'absolute',
+    bottom: 12,
+    alignSelf: 'center',
+    color: colors.textSubtle,
+    fontSize: 12,
   },
 });
