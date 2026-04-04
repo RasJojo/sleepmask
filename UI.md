@@ -1,4 +1,4 @@
-# SLEEPAY — UI/UX
+# SLEEPMASK— UI/UX
 
 > App de paiement privé, light theme, premium fintech.
 > Prompt de design complet envoyé à un outil de génération UI.
@@ -23,7 +23,7 @@
 ---
 
 ## Nom de l'app
-**Sleepay** (pas Sleepmask Pro)
+sleepmask
 
 ---
 
