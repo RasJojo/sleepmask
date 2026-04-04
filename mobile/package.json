@@ -10,7 +10,12 @@
     "test": "jest"
   },
   "dependencies": {
+    "@dynamic-labs/embedded-wallet": "^4.75.0",
+    "@dynamic-labs/sdk-react-core": "^4.75.0",
+    "@dynamic-labs/waas-evm": "^4.75.0",
+    "@noble/hashes": "^2.0.1",
     "@react-native/new-app-screen": "0.84.1",
+    "@scure/bip39": "^2.0.1",
     "react": "19.2.3",
     "react-native": "0.84.1",
     "react-native-safe-area-context": "^5.5.2"

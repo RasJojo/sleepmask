@@ -9,6 +9,8 @@
     "test:unlink": "ts-node src/services/test-unlink.ts"
   },
   "dependencies": {
+    "@noble/hashes": "^2.0.1",
+    "@scure/bip39": "^2.0.1",
     "@unlink-xyz/sdk": "latest",
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",
