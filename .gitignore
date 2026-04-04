@@ -13,6 +13,11 @@ dist/
 artifacts/
 cache/
 typechain-types/
+contracts/scripts/
+contracts/test/
+contracts/contracts/MockERC20.sol
+contracts/tsconfig.json
+backend/tsconfig.json
 
 # Flutter
 .dart_tool/

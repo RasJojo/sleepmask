@@ -1,6 +1,30 @@
-# SLEEPMASK PRO — PROGRESS
+# SLEEPAY — PROGRESS
 
-## État actuel : ÉTAPE 1 — Test Unlink SDK
+## État actuel : ÉTAPE 3 — Backend + Smart Contract ✅
+
+---
+
+## ARCHITECTURE FINALE VALIDÉE
+
+### Stack
+- **Frontend** : React Native (ChatGPT génère l'UI, Claude intègre la blockchain)
+- **Backend** : Node.js / Express — proxy stateless Unlink
+- **Smart contract** : Solidity / Hardhat — Base Sepolia
+- **Auth** : Dynamic SDK (embedded wallet)
+- **Privacy** : Unlink SDK (ZK pool transfers)
+
+### Modèle de confidentialité
+- Identité Unlink dérivée client-side (signature Dynamic → mnemonic → unlink1...)
+- Backend ne stocke JAMAIS la mnemonic — reçue à chaque requête, oubliée aussitôt
+- Adresse Unlink destinataire hashée on-chain (keccak256)
+- Adresses one-shot via index Unlink incrémental (accountIndex N par réception)
+
+### Bounties ciblés
+| Bounty | Montant | Fit |
+|--------|---------|-----|
+| Unlink — Best Private Application | $3k | ✅ Core |
+| Dynamic — Mobile | $1.667k | ✅ Core |
+| Arc — Best Smart Contracts Stablecoin Logic | $3k | ✅ Contrat Arc-worthy |
 
 ---
 
@@ -9,82 +33,82 @@
 ### ✅ Setup initial
 - Repo git initialisé
 - CLAUDE.md rédigé
-- PROGRESS.md créé
+- Structure dossiers créée
 
-### 🔄 ÉTAPE 1 — Unlink SDK fonctionne (BLOCKER)
-**Statut : EN COURS**
+### ✅ ÉTAPE 1 — Unlink SDK testé (backend)
+- `backend/src/services/test-unlink.ts` écrit et compilé
+- SDK `@unlink-xyz/sdk` installé
+- Bloquant résolu : token test = `0x7501de8ea37a21e20e6e65947d2ecab0e9f061a7`
 
-Fichiers créés :
-- [x] `.env.example`
-- [x] `backend/package.json`
-- [x] `backend/tsconfig.json`
-- [x] `backend/src/services/test-unlink.ts`
+### ✅ ÉTAPE 2 — Smart contract déployé
+- `contracts/contracts/SleepayPaymentRequest.sol` — 10/10 tests passent
+- Setup Hardhat complet
+- Script de déploiement Base Sepolia prêt
+- **À faire** : `cd contracts && npm run deploy:baseSepolia` (besoin ETH)
 
-Fait :
-- [x] `.env.example` créé
-- [x] `backend/package.json` + `tsconfig.json` créés
-- [x] `npm install` — 178 packages, 0 vulnerabilities
-- [x] `test-unlink.ts` écrit + TypeScript compile sans erreur (`tsc --noEmit` OK)
-- [x] `.gitignore` créé
+### ✅ ÉTAPE 3 — Backend Express complet
+- `backend/src/index.ts` — serveur Express
+- `backend/src/routes/pay.ts` — POST /api/pay
+- `backend/src/routes/balance.ts` — POST /api/balance
+- `backend/src/routes/deposit.ts` — POST /api/deposit
+- `backend/src/routes/receive.ts` — POST /api/receive/create + GET /api/receive/status/:id
+- `backend/src/services/unlink.service.ts` — wrapper Unlink
+- `backend/src/services/contract.service.ts` — wrapper viem/contrat
+- TypeScript compile sans erreur
 
-À faire (bloquant — faire maintenant) :
-- [ ] Récupérer l'API key sur https://hackaton-apikey.vercel.app
-- [ ] Créer `.env` depuis `.env.example` et remplir :
-      - `UNLINK_API_KEY`
-      - `EVM_PRIVATE_KEY` (wallet avec ETH sur Base Sepolia)
-      - `USER_MNEMONIC` (générer : `node -e "const {generateMnemonic}=require('viem/accounts');console.log(generateMnemonic())"`)
-      - `RPC_URL=https://sepolia.base.org`
-- [ ] Aller sur https://hackaton-apikey.vercel.app/faucet pour envoyer des tokens de test à l'adresse EVM
-- [ ] `cd backend && npm run test:unlink`
-- [ ] Vérifier les txHash dans la console — noter ici
+### ✅ ÉTAPE 4 — Services React Native
+- `mobile/src/services/api.ts` — client HTTP backend
+- `mobile/src/services/identity.ts` — dérivation mnemonic (placeholder @scure/bip39)
+- `mobile/src/hooks/useBalance.ts`
+- `mobile/src/hooks/usePayment.ts`
+- `mobile/src/hooks/useReceive.ts`
+- `mobile/src/hooks/useDeposit.ts`
 
-Note SDK : le package npm est `@unlink-xyz/sdk` (pas `@unlink/sdk`)
-Token de test Base Sepolia : `0x7501de8ea37a21e20e6e65947d2ecab0e9f061a7`
-Engine URL : `https://staging-api.unlink.xyz`
+### 🔄 ÉTAPE 5 — UI React Native (ChatGPT génère, Claude intègre)
+- [ ] Init projet Expo / React Native dans `/mobile`
+- [ ] Installer Dynamic SDK RN
+- [ ] Installer @scure/bip39 pour dérivation mnemonic
+- [ ] Brancher les hooks sur les screens générés par ChatGPT
+- [ ] QR scanner (react-native-vision-camera ou expo-barcode-scanner)
 
-### ⏳ ÉTAPE 2 — Smart contract déployé
-- Init Hardhat dans `/contracts`
-- Deploy `SleepmaskPaymentRequest.sol` sur Base Sepolia
-- Note l'adresse dans `.env` → `CONTRACT_ADDRESS`
+### ⏳ ÉTAPE 6 — Deploy + tests end-to-end
+- [ ] ETH Base Sepolia sur `0x72f262444ef740B4F6456910Ad64a1B3102CFCf4`
+- [ ] `cd contracts && npm run deploy:baseSepolia`
+- [ ] `cd backend && npm run dev`
+- [ ] Flow complet : deposit → receive request → scan → pay → confirm
 
-### ⏳ ÉTAPE 3 — Backend : endpoint /pay
-### ⏳ ÉTAPE 4 — WalletConnect Pay merchant side
-### 🔄 ÉTAPE 5 — Flutter app + Dynamic wallet
-**Statut : EN COURS**
-
-Fait :
-- [x] Structure Flutter complète : HomeScreen, ScanScreen, PaymentScreen
-- [x] Dynamic SDK intégré (dynamic_sdk ^1.2.10)
-- [x] QR scanner (mobile_scanner ^7.2.0)
-- [x] Mode mock (Config.kMockMode = true) pour tester sans backend ni Dynamic
-- [x] App buildée et tournant sur simulateur iPhone 16 Pro
-
-À faire :
-- [ ] Récupérer DYNAMIC_ENV_ID sur app.dynamic.xyz
-- [ ] Passer kMockMode à false + tester auth Dynamic réelle
-### ⏳ ÉTAPE 6 — Scanner + flow complet
 ### ⏳ ÉTAPE 7 — Démo + README
 
 ---
 
-## BLOCAGES
+## CLÉS NÉCESSAIRES
 
-_Aucun pour l'instant._
+| Variable | Statut | Où la trouver |
+|----------|--------|---------------|
+| `UNLINK_API_KEY` | ✅ Set | hackaton-apikey.vercel.app |
+| `EVM_PRIVATE_KEY` | ✅ Set | Wallet test généré |
+| `DYNAMIC_ENV_ID` | ✅ Set | app.dynamic.xyz |
+| `CONTRACT_ADDRESS` | ⏳ Après deploy | `npm run deploy:baseSepolia` |
+| ETH Base Sepolia | ⏳ Manquant | faucet.base.org |
 
 ---
 
-## ADRESSES DÉPLOYÉES
+## ADRESSES
 
 | Contrat | Réseau | Adresse |
 |---------|--------|---------|
-| SleepmaskPaymentRequest | Base Sepolia | _non déployé_ |
+| SleepayPaymentRequest | Base Sepolia | _non déployé_ |
+| USDC test Unlink | Base Sepolia | `0x7501de8ea37a21e20e6e65947d2ecab0e9f061a7` |
+
+## Wallet test
+- EVM : `0x72f262444ef740B4F6456910Ad64a1B3102CFCf4`
 
 ---
 
 ## NOTES TECHNIQUES
 
-- SDK Unlink : `@unlink-xyz/sdk` + `viem`
-- `createUnlink()` prend un `account` (mnemonic Unlink) + un `evm` (wallet viem pour txs on-chain)
-- `EVM_PRIVATE_KEY` = clé privée du relayer pour signer les txs EVM (approve, deposit, withdraw)
-- `USER_MNEMONIC` = identité Unlink de l'user (12 mots BIP39), stockée côté backend
-- Token test : `0x7501de8ea37a21e20e6e65947d2ecab0e9f061a7` (faucet Unlink)
+- Backend stateless : mnemonic jamais stockée, passée à chaque requête
+- Unlink accountIndex incrémental pour adresses one-shot à la réception
+- Smart contract : `unlinkAddressHash = keccak256(unlinkAddress)` — protège la destination
+- Arc bounty : contrat avec logique conditionnelle USDC + expiry + multi-step settlement
+- QR format : `sleepay://pay?requestId=0x...&amount=...&token=0x...`
