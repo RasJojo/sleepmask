@@ -1,6 +1,10 @@
 # Secrets
 .env
 
+# Docs internes
+PROGRESS.md
+UI.md
+
 # Node
 node_modules/
 dist/
