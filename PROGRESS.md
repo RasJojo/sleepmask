@@ -49,7 +49,19 @@ Engine URL : `https://staging-api.unlink.xyz`
 
 ### ⏳ ÉTAPE 3 — Backend : endpoint /pay
 ### ⏳ ÉTAPE 4 — WalletConnect Pay merchant side
-### ⏳ ÉTAPE 5 — Flutter app + Dynamic wallet
+### 🔄 ÉTAPE 5 — Flutter app + Dynamic wallet
+**Statut : EN COURS**
+
+Fait :
+- [x] Structure Flutter complète : HomeScreen, ScanScreen, PaymentScreen
+- [x] Dynamic SDK intégré (dynamic_sdk ^1.2.10)
+- [x] QR scanner (mobile_scanner ^7.2.0)
+- [x] Mode mock (Config.kMockMode = true) pour tester sans backend ni Dynamic
+- [x] App buildée et tournant sur simulateur iPhone 16 Pro
+
+À faire :
+- [ ] Récupérer DYNAMIC_ENV_ID sur app.dynamic.xyz
+- [ ] Passer kMockMode à false + tester auth Dynamic réelle
 ### ⏳ ÉTAPE 6 — Scanner + flow complet
 ### ⏳ ÉTAPE 7 — Démo + README
 
