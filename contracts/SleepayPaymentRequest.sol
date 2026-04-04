@@ -1,1 +1,2 @@
 // Smart contract
+// Contract logic
