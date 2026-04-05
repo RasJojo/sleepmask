@@ -192,6 +192,47 @@ export async function resolveUnlinkAddress(params: {
   return unlinkClient.getAddress();
 }
 
+/**
+ * Retire tout le solde USDC privé (Unlink) vers le wallet EVM de l'utilisateur.
+ * Appelé automatiquement après un receive Cas 3 confirmé.
+ * Ne nécessite pas de signature MetaMask — signé par le compte Unlink (mnemonic).
+ * Retourne true si un retrait a été effectué, false si solde = 0.
+ */
+export async function withdrawPrivateBalanceToWallet(params: {
+  mnemonic: string;
+  wallet: BaseWallet | null;
+  walletAddress: string;
+  token?: `0x${string}`;
+}): Promise<boolean> {
+  const token = params.token ?? config.usdcToken;
+  const unlinkClient = await getOrCreateUnlinkClient(params);
+  await unlinkClient.ensureRegistered();
+
+  const balances = await unlinkClient.getBalances({ token });
+  const row = balances.balances.find(
+    b => b.token.toLowerCase() === token.toLowerCase(),
+  );
+  const amount = BigInt(row?.amount ?? '0');
+
+  if (amount === 0n) return false;
+
+  console.log(`[Unlink] auto-withdraw ${amount} ${token} → ${params.walletAddress}`);
+  const tx = await unlinkClient.withdraw({
+    token,
+    amount: amount.toString(),
+    recipientEvmAddress: params.walletAddress,
+  });
+
+  if (tx?.txId) {
+    await unlinkClient.pollTransactionStatus(tx.txId as string, {
+      timeoutMs: 120_000,
+      intervalMs: 3_000,
+    });
+  }
+
+  return true;
+}
+
 export async function depositUsdcToPrivateBalance(params: {
   mnemonic: string;
   wallet: BaseWallet;

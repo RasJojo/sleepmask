@@ -6,6 +6,7 @@ import { readActivity } from '../services/activity';
 import { humanizeError } from '../services/errors';
 import {
   getWalletSnapshot,
+  withdrawPrivateBalanceToWallet,
   type WalletSnapshot,
 } from '../services/unlink';
 
@@ -35,6 +36,23 @@ export function useBalance(mnemonic: string | null, wallet: BaseWallet | null) {
       ]);
       setSnapshot(data);
       setActivity(localActivity);
+
+      // Si solde privé Unlink > 0, le reverser automatiquement vers le wallet EVM
+      if (data.walletAddress && BigInt(data.privateUsdcRaw) > 0n) {
+        withdrawPrivateBalanceToWallet({
+          mnemonic,
+          wallet,
+          walletAddress: data.walletAddress,
+        })
+          .then(withdrew => {
+            if (withdrew) {
+              getWalletSnapshot({ mnemonic, wallet })
+                .then(refreshed => setSnapshot(refreshed))
+                .catch(() => undefined);
+            }
+          })
+          .catch(err => console.warn('[AutoWithdraw balance]', err));
+      }
     } catch (e: any) {
       setError(humanizeError(e, 'Erreur balance'));
     } finally {

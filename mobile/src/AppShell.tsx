@@ -35,7 +35,7 @@ import { useBalance } from './hooks/useBalance';
 import { usePayment } from './hooks/usePayment';
 import { useReceive } from './hooks/useReceive';
 import { config } from './services/config';
-import { depositUsdcToPrivateBalance, resolveUnlinkAddress } from './services/unlink';
+import { depositUsdcToPrivateBalance, resolveUnlinkAddress, withdrawPrivateBalanceToWallet } from './services/unlink';
 
 type Stage = 'splash' | 'login' | 'app';
 type TabKey = 'home' | 'transfer' | 'profile';
@@ -145,14 +145,21 @@ export function AppShell() {
     }
   }, [payStatus, payError, modal, refreshBalance, resetPay]);
 
-  // ── Transition modale réception : paid → succès
+  // ── Transition modale réception : paid → succès + auto-withdraw Unlink → EVM
   useEffect(() => {
     if (receiveStatus === 'paid') {
       setModal({ type: 'transaction', phase: 'success', variant: 'receive' });
-      refreshBalance();
       resetReceive();
+
+      if (mnemonic && walletAddress) {
+        withdrawPrivateBalanceToWallet({ mnemonic, wallet, walletAddress })
+          .then(() => refreshBalance())
+          .catch(err => console.warn('[AutoWithdraw]', err));
+      } else {
+        refreshBalance();
+      }
     }
-  }, [receiveStatus, refreshBalance, resetReceive]);
+  }, [receiveStatus, mnemonic, wallet, walletAddress, refreshBalance, resetReceive]);
 
   useEffect(() => {
     if (receiveError) {
