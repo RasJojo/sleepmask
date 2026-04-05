@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { transfer, withdraw, getUnlinkAddress, USDC_TOKEN } from "../services/unlink.service.js";
+import { transfer, withdraw, getUnlinkAddress, getBalance, USDC_TOKEN } from "../services/unlink.service.js";
 import {
   instructPaymentOnChain,
   markPaidOnChain,

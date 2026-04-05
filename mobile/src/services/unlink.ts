@@ -25,6 +25,67 @@ export type WalletSnapshot = {
   walletUsdcRaw: string;
 };
 
+// ── Singleton Unlink client ─────────────────────────────────────────────────
+// The Permit2NonceManager is deeply stateful — it holds an in-memory cache of
+// allocated nonces. Creating a new instance for each deposit resets this cache
+// and causes "already used" errors when the engine tries to relay the tx.
+// One instance per (mnemonic + walletId + walletAddress) tuple, recreated on
+// wallet reconnection or logout.
+
+let _unlinkClient: ReturnType<typeof createUnlink> | null = null;
+let _unlinkClientKey = '';
+
+export function resetUnlinkClient() {
+  _unlinkClient = null;
+  _unlinkClientKey = '';
+}
+
+async function getOrCreateUnlinkClient(params: {
+  mnemonic: string;
+  wallet: BaseWallet | null;
+}) {
+  const key = [
+    params.mnemonic,
+    params.wallet?.id ?? 'none',
+    params.wallet?.address ?? 'none',
+  ].join(':');
+
+  if (_unlinkClient && _unlinkClientKey === key) {
+    return _unlinkClient;
+  }
+
+  const unlinkBase = {
+    engineUrl: config.unlinkEngineUrl,
+    apiKey: config.unlinkApiKey,
+    account: unlinkAccount.fromMnemonic({ mnemonic: params.mnemonic }),
+  };
+
+  let client: ReturnType<typeof createUnlink>;
+
+  if (!params.wallet) {
+    client = createUnlink(unlinkBase);
+  } else {
+    const walletClient = await dynamicClient.viem.createWalletClient({
+      wallet: params.wallet,
+      chain: baseSepolia,
+    });
+
+    client = createUnlink({
+      ...unlinkBase,
+      evm: unlinkEvm.fromViem({
+        walletClient,
+        publicClient,
+      }),
+    });
+  }
+
+  _unlinkClient = client;
+  _unlinkClientKey = key;
+  return client;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
 function formatTokenAmount(
   amount: bigint,
   decimals: number,
@@ -40,10 +101,7 @@ function formatTokenAmount(
 
 async function getWalletBalances(walletAddress: string | null) {
   if (!walletAddress) {
-    return {
-      walletUsdc: 0n,
-      walletEth: 0n,
-    };
+    return { walletUsdc: 0n, walletEth: 0n };
   }
 
   const [walletUsdc, walletEth] = await Promise.all([
@@ -64,35 +122,7 @@ async function getWalletBalances(walletAddress: string | null) {
   };
 }
 
-export async function buildUnlinkClient(params: {
-  mnemonic: string;
-  wallet: BaseWallet | null;
-}) {
-  const unlinkBase = {
-    engineUrl: config.unlinkEngineUrl,
-    apiKey: config.unlinkApiKey,
-    account: unlinkAccount.fromMnemonic({
-      mnemonic: params.mnemonic,
-    }),
-  };
-
-  if (!params.wallet) {
-    return createUnlink(unlinkBase);
-  }
-
-  const walletClient = await dynamicClient.viem.createWalletClient({
-    wallet: params.wallet,
-    chain: baseSepolia,
-  });
-
-  return createUnlink({
-    ...unlinkBase,
-    evm: unlinkEvm.fromViem({
-      walletClient,
-      publicClient,
-    }),
-  });
-}
+// ── Public API ───────────────────────────────────────────────────────────────
 
 export async function getWalletSnapshot(params: {
   mnemonic: string;
@@ -105,7 +135,7 @@ export async function getWalletSnapshot(params: {
   let privateUsdc = 0n;
 
   try {
-    const unlinkClient = await buildUnlinkClient(params);
+    const unlinkClient = await getOrCreateUnlinkClient(params);
     await unlinkClient.ensureRegistered();
 
     const [resolvedAddress, privateBalances] = await Promise.all([
@@ -120,8 +150,7 @@ export async function getWalletSnapshot(params: {
       )?.amount ?? '0';
     privateUsdc = BigInt(privateUsdcBalanceRaw);
   } catch (error) {
-    // Keep the app usable if Unlink private state fails; wallet balances still render.
-    console.warn('[Unlink] getWalletSnapshot fallback (private state unavailable)', error);
+    console.warn('[Unlink] getWalletSnapshot fallback', error);
   }
 
   const walletBalances = await walletBalancesPromise;
@@ -130,36 +159,22 @@ export async function getWalletSnapshot(params: {
     {
       id: 'wallet-usdc',
       symbol: 'USDC',
-      name: 'Wallet public',
+      name: 'USDC',
       amount: formatTokenAmount(walletBalances.walletUsdc, 6),
       note: 'Base Sepolia',
       primary: true,
     },
     {
-      id: 'private-usdc',
-      symbol: 'USDC',
-      name: 'Solde Sleepmask',
-      amount: formatTokenAmount(privateUsdc, 6),
-      note: unlinkAddress
-        ? 'Disponible pour payer et recevoir'
-        : 'Solde privé temporairement indisponible',
-    },
-    {
       id: 'wallet-eth',
       symbol: 'ETH',
-      name: 'Gas réseau',
+      name: 'ETH',
       amount: formatTokenAmount(walletBalances.walletEth, 18, 4, 4),
-      note: 'Wallet Dynamic',
+      note: 'Gas réseau',
     },
-  ].filter(item => item.primary || item.amount !== '0,00' && item.amount !== '0,0000');
+  ].filter(item => item.primary || item.amount !== '0,0000');
 
   return {
-    balances: [
-      {
-        token: 'USDC',
-        amount: walletBalances.walletUsdc.toString(),
-      },
-    ],
+    balances: [{ token: 'USDC', amount: walletBalances.walletUsdc.toString() }],
     holdings,
     unlinkAddress,
     walletAddress,
@@ -168,16 +183,33 @@ export async function getWalletSnapshot(params: {
   };
 }
 
+export async function resolveUnlinkAddress(params: {
+  mnemonic: string;
+  wallet: BaseWallet | null;
+}) {
+  const unlinkClient = await getOrCreateUnlinkClient(params);
+  await unlinkClient.ensureRegistered();
+  return unlinkClient.getAddress();
+}
+
 export async function depositUsdcToPrivateBalance(params: {
   mnemonic: string;
   wallet: BaseWallet;
   amount: string;
   token?: `0x${string}`;
 }) {
-  const unlinkClient = await buildUnlinkClient({
-    mnemonic: params.mnemonic,
+  // Always ensure MetaMask is on Base Sepolia before depositing
+  const tempWalletClient = await dynamicClient.viem.createWalletClient({
     wallet: params.wallet,
+    chain: baseSepolia,
   });
+  try {
+    await tempWalletClient.switchChain({ id: baseSepolia.id });
+  } catch (_) {
+    // already on correct chain or unsupported
+  }
+
+  const unlinkClient = await getOrCreateUnlinkClient(params);
 
   const tx = await unlinkClient.deposit({
     token: params.token ?? config.usdcToken,

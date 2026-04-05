@@ -32,11 +32,10 @@ import type { ActivityItem, Holding } from './types';
 import { colors, radius, shadows } from './theme';
 import { useIdentity } from './hooks/useIdentity';
 import { useBalance } from './hooks/useBalance';
-import { useDeposit } from './hooks/useDeposit';
 import { usePayment } from './hooks/usePayment';
 import { useReceive } from './hooks/useReceive';
 import { config } from './services/config';
-import { depositUsdcToPrivateBalance } from './services/unlink';
+import { depositUsdcToPrivateBalance, resolveUnlinkAddress } from './services/unlink';
 
 type Stage = 'splash' | 'login' | 'app';
 type TabKey = 'home' | 'transfer' | 'profile';
@@ -76,7 +75,6 @@ export function AppShell() {
     holdings,
     activity,
     unlinkAddress,
-    privateUsdcRaw,
     error: balanceError,
     refresh: refreshBalance,
   } = useBalance(mnemonic, wallet);
@@ -89,14 +87,6 @@ export function AppShell() {
     payEvm,
     reset: resetPay,
   } = usePayment(mnemonic);
-
-  // ── Dépôt ────────────────────────────────────────────────────────────────
-  const {
-    status: depositStatus,
-    error: depositError,
-    deposit,
-    reset: resetDeposit,
-  } = useDeposit(mnemonic, wallet);
 
   // ── Réception ─────────────────────────────────────────────────────────────
   const {
@@ -116,12 +106,12 @@ export function AppShell() {
   const [payRecipient, setPayRecipient] = useState('');
   const [payLinkInput, setPayLinkInput] = useState('');
   const [payEvmAddress, setPayEvmAddress] = useState('');
-  const [depositAmount, setDepositAmount] = useState('');
   const [receiveAmount, setReceiveAmount] = useState('');
   const [flexibleReceive, setFlexibleReceive] = useState(false);
   const [receiveShareMode, setReceiveShareMode] =
     useState<ReceiveShareMode>('sleepmask');
   const [modal, setModal] = useState<ModalState>(null);
+  const [paying, setPaying] = useState(false);
 
   // QR parsé après scan
   const [parsedRequestId, setParsedRequestId] = useState<string | null>(null);
@@ -155,21 +145,6 @@ export function AppShell() {
     }
   }, [payStatus, payError, modal, refreshBalance, resetPay]);
 
-  useEffect(() => {
-    if (depositStatus === 'success') {
-      Alert.alert('Dépôt confirmé', 'Les USDC ont été ajoutés à Sleepmask.');
-      setDepositAmount('');
-      refreshBalance();
-      resetDeposit();
-      return;
-    }
-
-    if (depositStatus === 'error' && depositError) {
-      Alert.alert('Dépôt échoué', depositError);
-      resetDeposit();
-    }
-  }, [depositError, depositStatus, refreshBalance, resetDeposit]);
-
   // ── Transition modale réception : paid → succès
   useEffect(() => {
     if (receiveStatus === 'paid') {
@@ -178,12 +153,6 @@ export function AppShell() {
       resetReceive();
     }
   }, [receiveStatus, refreshBalance, resetReceive]);
-
-  useEffect(() => {
-    if (receiveRequest) {
-      setReceiveShareMode('sleepmask');
-    }
-  }, [receiveRequest]);
 
   useEffect(() => {
     if (receiveError) {
@@ -268,6 +237,10 @@ export function AppShell() {
   };
 
   const startPayment = async () => {
+    if (paying) {
+      return;
+    }
+
     if (!mnemonic) {
       Alert.alert('Identité requise', 'Connectez-vous d\'abord.');
       return;
@@ -282,38 +255,30 @@ export function AppShell() {
       return;
     }
 
-    setModal({ type: 'transaction', phase: 'pending', variant: 'pay' });
-
-    const privateMicros = BigInt(privateUsdcRaw || '0');
-    const requiredMicros = BigInt(amountMicro);
-    const missingMicros =
-      requiredMicros > privateMicros ? requiredMicros - privateMicros : 0n;
-    if (missingMicros > 0n) {
-      if (!wallet) {
-        Alert.alert(
-          'Paiement échoué',
-          'Wallet non prêt pour le dépôt automatique.',
-        );
-        setModal(null);
-        return;
-      }
-      try {
-        await depositUsdcToPrivateBalance({
-          mnemonic,
-          wallet,
-          amount: missingMicros.toString(),
-          token: config.usdcToken,
-        });
-      } catch {
-        Alert.alert(
-          'Paiement échoué',
-          'Dépôt automatique impossible. Vérifiez votre solde wallet USDC et réessayez.',
-        );
-        setModal(null);
-        return;
-      }
-      await refreshBalance();
+    if (!wallet) {
+      Alert.alert('Paiement échoué', 'Wallet non connecté.');
+      return;
     }
+
+    setPaying(true);
+    try {
+      await depositUsdcToPrivateBalance({
+        mnemonic,
+        wallet,
+        amount: amountMicro.toString(),
+        token: config.usdcToken,
+      });
+    } catch (depositErr: any) {
+      setPaying(false);
+      Alert.alert(
+        'Dépôt échoué',
+        depositErr?.message || String(depositErr) || 'Erreur inconnue',
+      );
+      return;
+    }
+    setPaying(false);
+
+    setModal({ type: 'transaction', phase: 'pending', variant: 'pay' });
 
     const paymentToken = parsedToken ?? config.usdcToken;
     const directAddress = payEvmAddress.trim();
@@ -352,7 +317,20 @@ export function AppShell() {
       return;
     }
 
-    if (!unlinkAddress) {
+    let effectiveUnlinkAddress = unlinkAddress;
+
+    if (!effectiveUnlinkAddress) {
+      try {
+        effectiveUnlinkAddress = await resolveUnlinkAddress({
+          mnemonic,
+          wallet,
+        });
+      } catch {
+        // keep guard below for user-facing message
+      }
+    }
+
+    if (!effectiveUnlinkAddress) {
       Alert.alert(
         'Adresse indisponible',
         "Votre adresse Sleepmask n'est pas encore prête. Réessayez dans un instant.",
@@ -374,6 +352,7 @@ export function AppShell() {
         amount: amountMicro.toString(),
         flexibleAmount: false,
         token: config.usdcToken,
+        unlinkAddressOverride: effectiveUnlinkAddress,
       });
       return;
     }
@@ -382,25 +361,8 @@ export function AppShell() {
       amount: '0',
       flexibleAmount: true,
       token: config.usdcToken,
+      unlinkAddressOverride: effectiveUnlinkAddress,
     });
-  };
-
-  const startDeposit = async () => {
-    if (!mnemonic) {
-      Alert.alert('Identité requise', 'Connectez-vous d\'abord.');
-      return;
-    }
-
-    const amountMicro = Math.round(
-      parseFloat((depositAmount || '0').replace(',', '.')) * 1_000_000,
-    );
-
-    if (!Number.isFinite(amountMicro) || amountMicro <= 0) {
-      Alert.alert('Montant invalide', 'Saisissez un montant USDC valide.');
-      return;
-    }
-
-    await deposit(amountMicro.toString(), config.usdcToken);
   };
 
   const handleLogout = async () => {
@@ -470,10 +432,7 @@ export function AppShell() {
                   balance={formattedBalance}
                   holdings={holdings}
                   activity={activity}
-                  depositAmount={depositAmount}
                   onToggleBalance={() => setBalanceMasked(current => !current)}
-                  onChangeDepositAmount={setDepositAmount}
-                  onDeposit={startDeposit}
                   onRefresh={refreshBalance}
                   onOpenPay={openPay}
                   onOpenReceive={openReceive}
@@ -507,6 +466,7 @@ export function AppShell() {
                   }
                   onOpenScan={() => setModal({ type: 'scan' })}
                   onParsePayLink={parsePayLink}
+                  payingInProgress={paying}
                   onStartPayment={startPayment}
                   onGenerateReceive={generateReceiveRequest}
                   onOpenFullQr={() =>
@@ -680,10 +640,7 @@ type HomeTabProps = {
   balance?: string;
   holdings: Holding[];
   activity: ActivityItem[];
-  depositAmount: string;
   onToggleBalance: () => void;
-  onChangeDepositAmount: (value: string) => void;
-  onDeposit: () => void;
   onRefresh: () => void;
   onOpenPay: () => void;
   onOpenReceive: () => void;
@@ -696,10 +653,7 @@ function HomeTab({
   balance,
   holdings,
   activity,
-  depositAmount,
   onToggleBalance,
-  onChangeDepositAmount,
-  onDeposit,
   onRefresh,
   onOpenPay,
   onOpenReceive,
@@ -734,21 +688,6 @@ function HomeTab({
         <PrimaryButton label="Payer" onPress={onOpenPay} />
         <SecondaryButton label="Recevoir" onPress={onOpenReceive} />
       </View>
-
-      <SectionBlock
-        title="Approvisionner"
-        caption="Déposez des USDC depuis votre wallet vers Sleepmask."
-      >
-        <InputField
-          label="Montant à déposer"
-          value={depositAmount}
-          onChangeText={onChangeDepositAmount}
-          placeholder="25,00"
-          keyboardType="decimal-pad"
-          hint="Le dépôt signe une vraie transaction depuis votre wallet public."
-        />
-        <PrimaryButton label="Déposer en USDC" onPress={onDeposit} />
-      </SectionBlock>
 
       <SectionBlock
         title="Tokens détenus"
@@ -797,6 +736,7 @@ type TransferTabProps = {
   onChangeReceiveShareMode: (value: string) => void;
   onOpenScan: () => void;
   onParsePayLink: () => void;
+  payingInProgress: boolean;
   onStartPayment: () => void;
   onGenerateReceive: () => void;
   onOpenFullQr: () => void;
@@ -827,6 +767,7 @@ function TransferTab({
   onChangeReceiveShareMode,
   onOpenScan,
   onParsePayLink,
+  payingInProgress,
   onStartPayment,
   onGenerateReceive,
   onOpenFullQr,
@@ -909,7 +850,11 @@ function TransferTab({
               hint="Repère enregistré uniquement dans le cache local du téléphone."
             />
 
-            <PrimaryButton label="Confirmer" onPress={onStartPayment} />
+            <PrimaryButton
+              label={payingInProgress ? 'Signature en cours…' : 'Confirmer'}
+              onPress={onStartPayment}
+              disabled={payingInProgress}
+            />
           </SectionBlock>
         </>
       ) : (

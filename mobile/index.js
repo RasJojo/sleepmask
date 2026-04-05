@@ -2,6 +2,7 @@
  * @format
  */
 
+import 'react-native-get-random-values';
 import './shims/browser-globals';
 import { AppRegistry } from 'react-native';
 import App from './App';

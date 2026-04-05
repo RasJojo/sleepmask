@@ -22,15 +22,22 @@ export function useReceive(unlinkAddress: string | null) {
     flexibleAmount?: boolean;
     ttlSeconds?: string;
     token?: string;
+    unlinkAddressOverride?: string;
   }) => {
-    if (!unlinkAddress) {
+    const effectiveUnlinkAddress =
+      params.unlinkAddressOverride?.trim() || unlinkAddress;
+
+    if (!effectiveUnlinkAddress) {
       setError('Adresse Unlink non disponible');
       return;
     }
     setStatus('pending');
     setError(null);
     try {
-      const data = await createReceiveRequest({ unlinkAddress, ...params });
+      const data = await createReceiveRequest({
+        ...params,
+        unlinkAddress: effectiveUnlinkAddress,
+      });
       setRequest({
         ...data,
         requestedAmount: params.amount ?? '0',

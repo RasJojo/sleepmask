@@ -4,6 +4,7 @@ if (typeof globalThis !== 'undefined' && !globalThis.Buffer) {
   globalThis.Buffer = Buffer;
 }
 
+
 // Stub browser globals needed by @dynamic-labs/sdk-react-core (web-only SDK)
 if (typeof window !== 'undefined') {
   if (!window.location) {

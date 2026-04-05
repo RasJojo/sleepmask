@@ -233,6 +233,7 @@ async function writeRelayerContract(
   request: Parameters<ReturnType<typeof buildClients>["walletClient"]["writeContract"]>[0],
   attempt = 0
 ): Promise<`0x${string}`> {
+  const MAX_NONCE_RETRIES = 5;
   const { walletClient, account } = buildClients();
   const nonce = await allocateRelayerNonce();
 
@@ -245,7 +246,8 @@ async function writeRelayerContract(
   } catch (error) {
     resetRelayerNonceCursor();
 
-    if (attempt === 0 && isNonceSyncError(error)) {
+    if (isNonceSyncError(error) && attempt < MAX_NONCE_RETRIES) {
+      await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
       return writeRelayerContract(request, attempt + 1);
     }
 

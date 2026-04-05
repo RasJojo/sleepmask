@@ -7,6 +7,7 @@ import { clearActivity } from '../services/activity';
 import { config } from '../services/config';
 import { dynamicClient } from '../services/dynamic';
 import { deriveUnlinkMnemonic } from '../services/identity';
+import { resetUnlinkClient } from '../services/unlink';
 
 const IDENTITY_KEY_PREFIX = 'sleepmask_identity_v1:';
 
@@ -138,6 +139,7 @@ export function useIdentity(): IdentityState {
     const offLoggedOut = auth?.on?.('loggedOut', () => {
       setLoading(false);
       setError(null);
+      resetUnlinkClient();
     });
 
     return () => {
@@ -281,6 +283,7 @@ export function useIdentity(): IdentityState {
   }, [auth, sdk, wallets]);
 
   const logout = useCallback(async () => {
+    resetUnlinkClient();
     const keys         = await AsyncStorage.getAllKeys();
     const identityKeys = keys.filter(k => k.startsWith(IDENTITY_KEY_PREFIX));
     if (identityKeys.length > 0) await AsyncStorage.multiRemove(identityKeys);

@@ -29,6 +29,7 @@
     "react": "19.2.3",
     "react-native": "0.84.1",
     "react-native-camera-kit": "^17.0.1",
+    "react-native-get-random-values": "^2.0.0",
     "react-native-qrcode-svg": "^6.3.21",
     "react-native-safe-area-context": "^5.5.2",
     "react-native-svg": "^15.15.4",
