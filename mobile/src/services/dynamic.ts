@@ -5,13 +5,15 @@ import { ViemExtension } from '@dynamic-labs/viem-extension';
 
 import { baseSepoliaNetwork, config } from './config';
 
+const DYNAMIC_DEBUG = false;
+const DYNAMIC_EVENT_LOG = __DEV__;
+
 export const dynamicClient = createClient({
   environmentId: config.dynamicEnvId,
   appName: 'Sleepmask',
   appLogoUrl: `${config.appOrigin}/favicon.ico`,
   evmNetworks: [baseSepoliaNetwork],
-  useMetamaskSdk: true,
-  debug: __DEV__
+  debug: DYNAMIC_DEBUG
     ? {
         webview: true,
         messageTransport: true,
@@ -25,11 +27,32 @@ export const dynamicClient = createClient({
   }),
 ).extend(ViemExtension());
 
-if (__DEV__) {
-  dynamicClient.wallets.setHandler('walletConnected', async wallet => {
-    // Keep the connection flow accepted while exposing the connector details in logcat.
-    console.log('[Dynamic] walletConnected', wallet);
-    return true;
+if (DYNAMIC_EVENT_LOG) {
+  dynamicClient.auth.on('authInit', payload => {
+    console.log('[Dynamic] authInit', payload);
+  });
+
+  dynamicClient.auth.on('authSuccess', user => {
+    console.log('[Dynamic] authSuccess', user);
+  });
+
+  dynamicClient.auth.on('authFailed', (payload, reason) => {
+    console.warn('[Dynamic] authFailed', payload, reason);
+  });
+
+  dynamicClient.wallets.on('walletAdded', payload => {
+    console.log('[Dynamic] walletAdded', payload);
+  });
+
+  dynamicClient.wallets.on('walletReturnFromDeepLink', async payload => {
+    console.log('[Dynamic] walletReturnFromDeepLink', payload);
+
+    try {
+      const user = await dynamicClient.auth.refreshUser();
+      console.log('[Dynamic] refreshUser after deep link', user);
+    } catch (error) {
+      console.warn('[Dynamic] refreshUser after deep link failed', error);
+    }
   });
 
   dynamicClient.sdk.on('loadedChanged', loaded => {

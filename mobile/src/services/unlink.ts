@@ -21,6 +21,8 @@ export type WalletSnapshot = {
   holdings: Holding[];
   unlinkAddress: string;
   walletAddress: string | null;
+  privateUsdcRaw: string;
+  walletUsdcRaw: string;
 };
 
 function formatTokenAmount(
@@ -96,39 +98,51 @@ export async function getWalletSnapshot(params: {
   mnemonic: string;
   wallet: BaseWallet | null;
 }): Promise<WalletSnapshot> {
-  const unlinkClient = await buildUnlinkClient(params);
-
-  await unlinkClient.ensureRegistered();
-
   const walletAddress = params.wallet?.address ?? null;
-  const [unlinkAddress, privateBalances, walletBalances] = await Promise.all([
-    unlinkClient.getAddress(),
-    unlinkClient.getBalances(),
-    getWalletBalances(walletAddress),
-  ]);
+  const walletBalancesPromise = getWalletBalances(walletAddress);
 
-  const privateUsdcBalance =
-    privateBalances.balances.find(
-      balance => balance.token.toLowerCase() === config.usdcToken.toLowerCase(),
-    )?.amount ?? '0';
+  let unlinkAddress = '';
+  let privateUsdc = 0n;
 
-  const privateUsdc = BigInt(privateUsdcBalance);
+  try {
+    const unlinkClient = await buildUnlinkClient(params);
+    await unlinkClient.ensureRegistered();
+
+    const [resolvedAddress, privateBalances] = await Promise.all([
+      unlinkClient.getAddress(),
+      unlinkClient.getBalances(),
+    ]);
+
+    unlinkAddress = resolvedAddress;
+    const privateUsdcBalanceRaw =
+      privateBalances.balances.find(
+        balance => balance.token.toLowerCase() === config.usdcToken.toLowerCase(),
+      )?.amount ?? '0';
+    privateUsdc = BigInt(privateUsdcBalanceRaw);
+  } catch (error) {
+    // Keep the app usable if Unlink private state fails; wallet balances still render.
+    console.warn('[Unlink] getWalletSnapshot fallback (private state unavailable)', error);
+  }
+
+  const walletBalances = await walletBalancesPromise;
 
   const holdings: Holding[] = [
-    {
-      id: 'private-usdc',
-      symbol: 'USDC',
-      name: 'Rail privé',
-      amount: formatTokenAmount(privateUsdc, 6),
-      note: 'Actif principal',
-      primary: true,
-    },
     {
       id: 'wallet-usdc',
       symbol: 'USDC',
       name: 'Wallet public',
       amount: formatTokenAmount(walletBalances.walletUsdc, 6),
-      note: 'Wallet Dynamic',
+      note: 'Base Sepolia',
+      primary: true,
+    },
+    {
+      id: 'private-usdc',
+      symbol: 'USDC',
+      name: 'Solde Sleepmask',
+      amount: formatTokenAmount(privateUsdc, 6),
+      note: unlinkAddress
+        ? 'Disponible pour payer et recevoir'
+        : 'Solde privé temporairement indisponible',
     },
     {
       id: 'wallet-eth',
@@ -143,12 +157,14 @@ export async function getWalletSnapshot(params: {
     balances: [
       {
         token: 'USDC',
-        amount: privateUsdc.toString(),
+        amount: walletBalances.walletUsdc.toString(),
       },
     ],
     holdings,
     unlinkAddress,
     walletAddress,
+    privateUsdcRaw: privateUsdc.toString(),
+    walletUsdcRaw: walletBalances.walletUsdc.toString(),
   };
 }
 
@@ -156,14 +172,21 @@ export async function depositUsdcToPrivateBalance(params: {
   mnemonic: string;
   wallet: BaseWallet;
   amount: string;
+  token?: `0x${string}`;
 }) {
   const unlinkClient = await buildUnlinkClient({
     mnemonic: params.mnemonic,
     wallet: params.wallet,
   });
 
-  return unlinkClient.deposit({
-    token: config.usdcToken,
+  const tx = await unlinkClient.deposit({
+    token: params.token ?? config.usdcToken,
     amount: params.amount,
   });
+
+  if (tx && typeof tx === 'object' && 'txId' in tx && tx.txId) {
+    await unlinkClient.pollTransactionStatus(tx.txId as string);
+  }
+
+  return tx;
 }

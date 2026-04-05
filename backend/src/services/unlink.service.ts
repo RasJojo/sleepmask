@@ -16,8 +16,9 @@ import { baseSepolia } from "viem/chains";
 
 const ENGINE_URL = "https://staging-api.unlink.xyz";
 
-// Token USDC de test Unlink sur Base Sepolia
-export const USDC_TOKEN = "0x7501de8ea37a21e20e6e65947d2ecab0e9f061a7";
+// USDC canonique sur Base Sepolia (override possible via env USDC_TOKEN).
+export const USDC_TOKEN =
+  (process.env.USDC_TOKEN || "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as `0x${string}`;
 
 // ─── Clients viem ─────────────────────────────────────────────────────────────
 
@@ -59,6 +60,70 @@ export function buildUnlinkClient(mnemonic: string) {
   });
 }
 
+async function waitForProcessedTx(
+  client: ReturnType<typeof buildUnlinkClient>,
+  txId: string,
+  operation: string,
+  timeoutMs = 120000,
+) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await client.pollTransactionStatus(txId, {
+      intervalMs: 2000,
+      timeoutMs: 30000,
+    });
+    console.log(`[Unlink] ${operation} tx ${txId} -> ${status.status}`);
+
+    if (status.status === "processed" || status.status === "relayed") {
+      return status;
+    }
+
+    if (status.status === "failed") {
+      throw new Error(`${operation} failed on Unlink`);
+    }
+
+    // "relayed" can still be pending settlement in the engine.
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  throw new Error(`${operation} timeout on Unlink`);
+}
+
+function extractTokenAmount(
+  balances: Awaited<ReturnType<ReturnType<typeof buildUnlinkClient>["getBalances"]>>,
+  token: string,
+) {
+  const row = balances.balances.find(
+    balance => balance.token.toLowerCase() === token.toLowerCase(),
+  );
+  return BigInt(row?.amount ?? "0");
+}
+
+async function waitForTokenBalanceAtLeast(
+  client: ReturnType<typeof buildUnlinkClient>,
+  token: string,
+  minimum: bigint,
+  operation: string,
+  timeoutMs = 120000,
+) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const balances = await client.getBalances({ token });
+    const amount = extractTokenAmount(balances, token);
+    if (amount >= minimum) {
+      console.log(
+        `[Unlink] ${operation} balance ready token=${token} amount=${amount.toString()}`,
+      );
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  throw new Error(`${operation} balance timeout on Unlink`);
+}
+
 // ─── Opérations ───────────────────────────────────────────────────────────────
 
 export async function getBalance(mnemonic: string) {
@@ -69,9 +134,24 @@ export async function getBalance(mnemonic: string) {
 
 export async function deposit(mnemonic: string, amount: string, token = USDC_TOKEN) {
   const client = buildUnlinkClient(mnemonic);
+  console.log(`[Unlink] deposit start amount=${amount} token=${token}`);
   await client.ensureRegistered();
-  await client.ensureErc20Approval({ token, amount });
-  return client.deposit({ token, amount });
+  console.log("[Unlink] deposit registered");
+  const balancesBefore = await client.getBalances({ token });
+  const beforeAmount = extractTokenAmount(balancesBefore, token);
+  const approval = await client.ensureErc20Approval({ token, amount });
+  console.log(`[Unlink] approval status=${(approval as any)?.status ?? "unknown"}`);
+  const tx = await client.deposit({ token, amount });
+  console.log(`[Unlink] deposit txId=${tx.txId}`);
+  await waitForProcessedTx(client, tx.txId, "deposit");
+  await waitForTokenBalanceAtLeast(
+    client,
+    token,
+    beforeAmount + BigInt(amount),
+    "deposit",
+  );
+  console.log(`[Unlink] deposit processed txId=${tx.txId}`);
+  return tx;
 }
 
 export async function transfer(
@@ -81,17 +161,25 @@ export async function transfer(
   token = USDC_TOKEN
 ) {
   const client = buildUnlinkClient(mnemonic);
+  console.log(`[Unlink] transfer start amount=${amount} token=${token}`);
   await client.ensureRegistered();
+  console.log("[Unlink] transfer registered");
   const tx = await client.transfer({ recipientAddress: recipientUnlinkAddress, amount, token });
-  await client.pollTransactionStatus(tx.txId);
+  console.log(`[Unlink] transfer txId=${tx.txId}`);
+  await waitForProcessedTx(client, tx.txId, "transfer");
+  console.log(`[Unlink] transfer processed txId=${tx.txId}`);
   return tx;
 }
 
 export async function withdraw(mnemonic: string, toEvm: string, amount: string, token = USDC_TOKEN) {
   const client = buildUnlinkClient(mnemonic);
+  console.log(`[Unlink] withdraw start amount=${amount} token=${token} to=${toEvm}`);
   await client.ensureRegistered();
+  console.log("[Unlink] withdraw registered");
   const tx = await client.withdraw({ token, amount, recipientEvmAddress: toEvm });
-  await client.pollTransactionStatus(tx.txId);
+  console.log(`[Unlink] withdraw txId=${tx.txId}`);
+  await waitForProcessedTx(client, tx.txId, "withdraw");
+  console.log(`[Unlink] withdraw processed txId=${tx.txId}`);
   return tx;
 }
 

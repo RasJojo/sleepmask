@@ -6,7 +6,8 @@ export const config = {
   rpcUrl: 'https://sepolia.base.org',
   unlinkApiKey: 'Fh9H5JLbtLWKDBU31EcLDE',
   unlinkEngineUrl: 'https://staging-api.unlink.xyz',
-  usdcToken: '0x7501de8ea37a21e20e6e65947d2ecab0e9f061a7',
+  // Canonical USDC on Base Sepolia.
+  usdcToken: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
 } as const;
 
 export const baseSepoliaNetwork = {

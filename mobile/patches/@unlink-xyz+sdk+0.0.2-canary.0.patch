@@ -1,0 +1,31 @@
+diff --git a/node_modules/@unlink-xyz/sdk/dist/index.js b/node_modules/@unlink-xyz/sdk/dist/index.js
+index 0674e54..87cdd52 100644
+--- a/node_modules/@unlink-xyz/sdk/dist/index.js
++++ b/node_modules/@unlink-xyz/sdk/dist/index.js
+@@ -17,6 +17,11 @@ import {
+   poseidon15,
+   poseidon16
+ } from "poseidon-lite";
++import {
++  derivePublicKey as derivePublicKeyBlake2b,
++  signMessage as signMessageBlake2b,
++  verifySignature as verifySignatureBlake2b
++} from "@zk-kit/eddsa-poseidon/blake-2b";
+ var POSEIDON_FNS = [
+   void 0,
+   poseidon1,
+@@ -46,9 +51,11 @@ function poseidon(inputs) {
+ 
+ // src/crypto/eddsa.ts
+ async function loadEdDSA() {
+-  const { createRequire } = await import("module");
+-  const require2 = createRequire(import.meta.url);
+-  return require2("@zk-kit/eddsa-poseidon/blake-2b");
++  return {
++    derivePublicKey: derivePublicKeyBlake2b,
++    signMessage: signMessageBlake2b,
++    verifySignature: verifySignatureBlake2b
++  };
+ }
+ async function eddsaPublicKey(privateKey) {
+   const { derivePublicKey } = await loadEdDSA();

@@ -47,7 +47,10 @@ const router = Router();
 // Utilisé pour le Cas 3 : quand les fonds arrivent au one-shot, le backend
 // sait vers quelle adresse Unlink sweeper.
 // Perdu au redémarrage — acceptable pour le hackathon.
-export const receiveStore = new Map<string, { unlinkAddress: string; token: string }>();
+export const receiveStore = new Map<
+  string,
+  { unlinkAddress: string; token: `0x${string}` }
+>();
 
 // ─── POST /api/receive/create ─────────────────────────────────────────────────
 
@@ -64,12 +67,24 @@ export const receiveStore = new Map<string, { unlinkAddress: string; token: stri
  *   token          — token ERC20 (défaut USDC)
  */
 router.post("/receive/create", async (req: Request, res: Response) => {
-  const { unlinkAddress, amount = "0", ttlSeconds = "3600", token = USDC_TOKEN } = req.body;
+  const {
+    unlinkAddress,
+    amount = "0",
+    ttlSeconds = "3600",
+    token: tokenRaw = USDC_TOKEN,
+  } = req.body;
 
   if (!unlinkAddress) {
     res.status(400).json({ error: "unlinkAddress requis" });
     return;
   }
+
+  if (!/^0x[a-fA-F0-9]{40}$/.test(String(tokenRaw))) {
+    res.status(400).json({ error: "token invalide" });
+    return;
+  }
+
+  const token = tokenRaw as `0x${string}`;
 
   try {
     // Génère un requestId unique
@@ -83,7 +98,7 @@ router.post("/receive/create", async (req: Request, res: Response) => {
     const createTxHash = await createPaymentRequestOnChain({
       requestId,
       unlinkAddressHash,
-      token:      token as `0x${string}`,
+      token,
       amount:     BigInt(amount),
       ttlSeconds: BigInt(ttlSeconds),
     });

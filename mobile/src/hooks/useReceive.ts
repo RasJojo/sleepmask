@@ -5,6 +5,7 @@ import {
   getPaymentStatus,
   ReceiveRequest,
 } from '../services/api';
+import { humanizeError } from '../services/errors';
 
 type ReceiveStatus = 'idle' | 'pending' | 'paid' | 'error';
 
@@ -66,14 +67,14 @@ export function useReceive(unlinkAddress: string | null) {
               }),
             );
           } catch (pollError: any) {
-            setError(pollError?.message || 'Erreur suivi paiement');
+            setError(humanizeError(pollError, 'Erreur suivi paiement'));
           }
         })().catch((pollError: any) => {
-          setError(pollError?.message || 'Erreur suivi paiement');
+          setError(humanizeError(pollError, 'Erreur suivi paiement'));
         });
       }, 5000);
     } catch (e: any) {
-      setError(e?.message || 'Erreur création request');
+      setError(humanizeError(e, 'Erreur création request'));
       setStatus('error');
     }
   }, [unlinkAddress]);

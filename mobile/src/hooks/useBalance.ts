@@ -3,6 +3,7 @@ import type { BaseWallet } from '@dynamic-labs/types';
 
 import type { ActivityItem } from '../types';
 import { readActivity } from '../services/activity';
+import { humanizeError } from '../services/errors';
 import {
   getWalletSnapshot,
   type WalletSnapshot,
@@ -35,7 +36,7 @@ export function useBalance(mnemonic: string | null, wallet: BaseWallet | null) {
       setSnapshot(data);
       setActivity(localActivity);
     } catch (e: any) {
-      setError(e?.message || 'Erreur balance');
+      setError(humanizeError(e, 'Erreur balance'));
     } finally {
       setLoading(false);
     }
@@ -58,6 +59,8 @@ export function useBalance(mnemonic: string | null, wallet: BaseWallet | null) {
     activity,
     walletAddress: snapshot?.walletAddress ?? wallet?.address ?? null,
     unlinkAddress: snapshot?.unlinkAddress ?? null,
+    privateUsdcRaw: snapshot?.privateUsdcRaw ?? '0',
+    walletUsdcRaw: snapshot?.walletUsdcRaw ?? '0',
     loading,
     error,
     refresh,

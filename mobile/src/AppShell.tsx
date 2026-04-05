@@ -35,10 +35,13 @@ import { useBalance } from './hooks/useBalance';
 import { useDeposit } from './hooks/useDeposit';
 import { usePayment } from './hooks/usePayment';
 import { useReceive } from './hooks/useReceive';
+import { config } from './services/config';
+import { depositUsdcToPrivateBalance } from './services/unlink';
 
 type Stage = 'splash' | 'login' | 'app';
 type TabKey = 'home' | 'transfer' | 'profile';
 type TransferMode = 'pay' | 'receive';
+type ReceiveShareMode = 'sleepmask' | 'classic';
 type ModalState =
   | null
   | { type: 'scan' }
@@ -54,15 +57,16 @@ export function AppShell() {
   const { width, height } = useWindowDimensions();
   const compact = width < 390 || height < 760;
 
-  // ── Identité Sleepmask (mnémonique local BIP39) ───────────────────────────
+  // ── Identité Sleepmask ───────────────────────────────────────────────────
   const {
     mnemonic,
     wallet,
+    authenticated,
+    walletAddress,
     connectionMethod,
     loading: identityLoading,
     error: identityError,
     initialize: initIdentity,
-    connectWithEmail,
     logout: logoutIdentity,
   } = useIdentity();
 
@@ -71,15 +75,22 @@ export function AppShell() {
     balance,
     holdings,
     activity,
-    walletAddress,
     unlinkAddress,
+    privateUsdcRaw,
+    error: balanceError,
     refresh: refreshBalance,
   } = useBalance(mnemonic, wallet);
 
   // ── Paiement ──────────────────────────────────────────────────────────────
-  const { status: payStatus, error: payError, payRequest, reset: resetPay } = usePayment(mnemonic);
+  const {
+    status: payStatus,
+    error: payError,
+    payRequest,
+    payEvm,
+    reset: resetPay,
+  } = usePayment(mnemonic);
 
-  // ── Dépôt wallet public → rail privé ─────────────────────────────────────
+  // ── Dépôt ────────────────────────────────────────────────────────────────
   const {
     status: depositStatus,
     error: depositError,
@@ -91,6 +102,7 @@ export function AppShell() {
   const {
     status: receiveStatus,
     request: receiveRequest,
+    error: receiveError,
     createRequest,
     reset: resetReceive,
   } = useReceive(unlinkAddress);
@@ -103,22 +115,31 @@ export function AppShell() {
   const [payAmount, setPayAmount] = useState('');
   const [payRecipient, setPayRecipient] = useState('');
   const [payLinkInput, setPayLinkInput] = useState('');
+  const [payEvmAddress, setPayEvmAddress] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
   const [receiveAmount, setReceiveAmount] = useState('');
   const [flexibleReceive, setFlexibleReceive] = useState(false);
+  const [receiveShareMode, setReceiveShareMode] =
+    useState<ReceiveShareMode>('sleepmask');
   const [modal, setModal] = useState<ModalState>(null);
 
   // QR parsé après scan
   const [parsedRequestId, setParsedRequestId] = useState<string | null>(null);
   const [parsedRecipient, setParsedRecipient] = useState<string | null>(null);
+  const [parsedToken, setParsedToken] = useState<`0x${string}` | null>(null);
 
-  // ── Auto-transition login → app quand l'identité est prête ──────────────
+  // ── Auto-transition splash/login → app quand le wallet est connecté ─────
   useEffect(() => {
-    if (mnemonic && stage === 'login') {
+    if (authenticated && stage !== 'app') {
       setStage('app');
+    }
+  }, [authenticated, stage]);
+
+  useEffect(() => {
+    if (authenticated && mnemonic) {
       refreshBalance();
     }
-  }, [mnemonic, stage, refreshBalance]);
+  }, [authenticated, mnemonic, refreshBalance]);
 
   // ── Transition modale paiement : pending → success quand payStatus = success
   useEffect(() => {
@@ -136,7 +157,7 @@ export function AppShell() {
 
   useEffect(() => {
     if (depositStatus === 'success') {
-      Alert.alert('Dépôt confirmé', 'Les USDC ont été ajoutés au rail privé.');
+      Alert.alert('Dépôt confirmé', 'Les USDC ont été ajoutés à Sleepmask.');
       setDepositAmount('');
       refreshBalance();
       resetDeposit();
@@ -157,6 +178,24 @@ export function AppShell() {
       resetReceive();
     }
   }, [receiveStatus, refreshBalance, resetReceive]);
+
+  useEffect(() => {
+    if (receiveRequest) {
+      setReceiveShareMode('sleepmask');
+    }
+  }, [receiveRequest]);
+
+  useEffect(() => {
+    if (receiveError) {
+      Alert.alert('Réception indisponible', receiveError);
+    }
+  }, [receiveError]);
+
+  useEffect(() => {
+    if (balanceError) {
+      Alert.alert('Balance indisponible', balanceError);
+    }
+  }, [balanceError]);
 
   const transactionCounterparty = useMemo(() => {
     return modal?.type === 'transaction' && modal.variant === 'receive'
@@ -182,9 +221,15 @@ export function AppShell() {
       const requestId = url.searchParams.get('requestId');
       const amount    = url.searchParams.get('amount');
       const recipient = url.searchParams.get('recipient');
+      const token     = url.searchParams.get('token');
 
       if (requestId) setParsedRequestId(requestId);
       if (recipient) setParsedRecipient(decodeURIComponent(recipient));
+      if (token && /^0x[a-fA-F0-9]{40}$/.test(token)) {
+        setParsedToken(token as `0x${string}`);
+      } else {
+        setParsedToken(null);
+      }
       if (amount) setPayAmount((parseInt(amount, 10) / 1_000_000).toFixed(2));
       if (recipient && !payRecipient) {
         setPayRecipient('Paiement Sleepmask');
@@ -223,7 +268,10 @@ export function AppShell() {
   };
 
   const startPayment = async () => {
-    if (!mnemonic) { Alert.alert('Erreur', 'Identité non prête'); return; }
+    if (!mnemonic) {
+      Alert.alert('Identité requise', 'Connectez-vous d\'abord.');
+      return;
+    }
 
     const amountMicro = Math.round(
       parseFloat((payAmount || '0').replace(',', '.')) * 1_000_000,
@@ -234,27 +282,81 @@ export function AppShell() {
       return;
     }
 
-    if (!parsedRequestId || !parsedRecipient) {
-      Alert.alert(
-        'Request requise',
-        'Chargez un QR ou un lien Sleepmask valide avant de confirmer.',
-      );
+    setModal({ type: 'transaction', phase: 'pending', variant: 'pay' });
+
+    const privateMicros = BigInt(privateUsdcRaw || '0');
+    const requiredMicros = BigInt(amountMicro);
+    const missingMicros =
+      requiredMicros > privateMicros ? requiredMicros - privateMicros : 0n;
+    if (missingMicros > 0n) {
+      if (!wallet) {
+        Alert.alert(
+          'Paiement échoué',
+          'Wallet non prêt pour le dépôt automatique.',
+        );
+        setModal(null);
+        return;
+      }
+      try {
+        await depositUsdcToPrivateBalance({
+          mnemonic,
+          wallet,
+          amount: missingMicros.toString(),
+          token: config.usdcToken,
+        });
+      } catch {
+        Alert.alert(
+          'Paiement échoué',
+          'Dépôt automatique impossible. Vérifiez votre solde wallet USDC et réessayez.',
+        );
+        setModal(null);
+        return;
+      }
+      await refreshBalance();
+    }
+
+    const paymentToken = parsedToken ?? config.usdcToken;
+    const directAddress = payEvmAddress.trim();
+
+    if (/^0x[a-fA-F0-9]{40}$/.test(directAddress)) {
+      await payEvm({
+        recipientEvmAddress: directAddress,
+        amount: amountMicro.toString(),
+        token: paymentToken,
+        localTag: payRecipient || 'Retrait vers wallet',
+      });
       return;
     }
 
-    setModal({ type: 'transaction', phase: 'pending', variant: 'pay' });
+    if (parsedRequestId && parsedRecipient) {
+      await payRequest({
+        requestId: parsedRequestId,
+        recipientUnlinkAddress: parsedRecipient,
+        amount: amountMicro.toString(),
+        token: paymentToken,
+        localTag: payRecipient || 'Paiement Sleepmask',
+      });
+      return;
+    }
 
-    await payRequest({
-      requestId: parsedRequestId,
-      recipientUnlinkAddress: parsedRecipient,
-      amount: amountMicro.toString(),
-      localTag: payRecipient || 'Paiement Sleepmask',
-    });
+    Alert.alert(
+      'Destination requise',
+      'Scannez un QR Sleepmask, collez un lien valide, ou saisissez une adresse EVM.',
+    );
+    setModal(null);
   };
 
   const generateReceiveRequest = async () => {
+    if (!mnemonic) {
+      Alert.alert('Identité requise', 'Connectez-vous d\'abord.');
+      return;
+    }
+
     if (!unlinkAddress) {
-      Alert.alert('Adresse indisponible', 'Votre adresse privée n’est pas encore prête.');
+      Alert.alert(
+        'Adresse indisponible',
+        "Votre adresse Sleepmask n'est pas encore prête. Réessayez dans un instant.",
+      );
       return;
     }
 
@@ -271,6 +373,7 @@ export function AppShell() {
       await createRequest({
         amount: amountMicro.toString(),
         flexibleAmount: false,
+        token: config.usdcToken,
       });
       return;
     }
@@ -278,10 +381,16 @@ export function AppShell() {
     await createRequest({
       amount: '0',
       flexibleAmount: true,
+      token: config.usdcToken,
     });
   };
 
   const startDeposit = async () => {
+    if (!mnemonic) {
+      Alert.alert('Identité requise', 'Connectez-vous d\'abord.');
+      return;
+    }
+
     const amountMicro = Math.round(
       parseFloat((depositAmount || '0').replace(',', '.')) * 1_000_000,
     );
@@ -291,7 +400,7 @@ export function AppShell() {
       return;
     }
 
-    await deposit(amountMicro.toString(), 'USDC');
+    await deposit(amountMicro.toString(), config.usdcToken);
   };
 
   const handleLogout = async () => {
@@ -322,6 +431,19 @@ export function AppShell() {
         : receiveAmount || '0,00'
       : payAmount || '0,00';
 
+  const activeReceiveQrData =
+    receiveShareMode === 'classic'
+      ? receiveRequest?.qrClassic
+      : receiveRequest?.qrSleepmask;
+  const activeReceiveDisplayValue =
+    receiveShareMode === 'classic'
+      ? receiveRequest?.oneshotAddress
+      : receiveRequest?.qrSleepmask;
+  const activeReceiveLabel =
+    receiveShareMode === 'classic'
+      ? 'Wallet classique'
+      : 'Sleepmask';
+
   return (
     <>
       {stage === 'splash' ? (
@@ -333,7 +455,6 @@ export function AppShell() {
           loading={identityLoading}
           error={identityError}
           onConnect={initIdentity}
-          onConnectWithEmail={connectWithEmail}
         />
       ) : (
         <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -353,6 +474,7 @@ export function AppShell() {
                   onToggleBalance={() => setBalanceMasked(current => !current)}
                   onChangeDepositAmount={setDepositAmount}
                   onDeposit={startDeposit}
+                  onRefresh={refreshBalance}
                   onOpenPay={openPay}
                   onOpenReceive={openReceive}
                   onOpenProfile={() => setActiveTab('profile')}
@@ -367,37 +489,50 @@ export function AppShell() {
                   payAmount={payAmount}
                   payRecipient={payRecipient}
                   payLinkInput={payLinkInput}
+                  payEvmAddress={payEvmAddress}
                   receiveAmount={receiveAmount}
                   flexibleReceive={flexibleReceive}
+                  receiveShareMode={receiveShareMode}
+                  receiveQrData={activeReceiveQrData}
+                  receiveDisplayValue={activeReceiveDisplayValue}
+                  receiveDisplayLabel={activeReceiveLabel}
                   onChangePayAmount={setPayAmount}
                   onChangePayRecipient={setPayRecipient}
                   onChangePayLink={setPayLinkInput}
+                  onChangePayEvmAddress={setPayEvmAddress}
                   onChangeReceiveAmount={setReceiveAmount}
                   onToggleFlexibleReceive={setFlexibleReceive}
+                  onChangeReceiveShareMode={nextMode =>
+                    setReceiveShareMode(nextMode as ReceiveShareMode)
+                  }
                   onOpenScan={() => setModal({ type: 'scan' })}
                   onParsePayLink={parsePayLink}
                   onStartPayment={startPayment}
                   onGenerateReceive={generateReceiveRequest}
                   onOpenFullQr={() =>
-                    receiveRequest
+                    activeReceiveQrData
                       ? setModal({ type: 'fullQr' })
-                      : Alert.alert('QR indisponible', 'Générez d’abord une demande de paiement.')
+                      : Alert.alert('QR indisponible', "Générez d'abord une demande de paiement.")
                   }
-                  receiveQrData={receiveRequest?.qrSleepmask}
                   onCopyLink={() => {
-                    if (!receiveRequest?.qrSleepmask) {
-                      Alert.alert('Lien indisponible', 'Générez d’abord une demande de paiement.');
+                    if (!activeReceiveDisplayValue) {
+                      Alert.alert('Lien indisponible', "Générez d'abord une demande de paiement.");
                       return;
                     }
-                    Clipboard.setString(receiveRequest.qrSleepmask);
-                    Alert.alert('Lien copié', 'Le lien Sleepmask a été copié.');
+                    Clipboard.setString(activeReceiveDisplayValue);
+                    Alert.alert(
+                      'Copié',
+                      receiveShareMode === 'classic'
+                        ? "L'adresse one-shot a été copiée."
+                        : 'Le lien Sleepmask a été copié.',
+                    );
                   }}
                   onShare={async () => {
-                    if (!receiveRequest?.qrSleepmask) {
-                      Alert.alert('Lien indisponible', 'Générez d’abord une demande de paiement.');
+                    if (!activeReceiveQrData) {
+                      Alert.alert('Lien indisponible', "Générez d'abord une demande de paiement.");
                       return;
                     }
-                    await Share.share({ message: receiveRequest.qrSleepmask });
+                    await Share.share({ message: activeReceiveQrData });
                   }}
                 />
               ) : (
@@ -434,8 +569,9 @@ export function AppShell() {
         compact={compact}
         visible={modal?.type === 'fullQr'}
         amount={flexibleReceive ? 'Montant libre' : `${receiveAmount || '0,00'} USDC`}
-        qrData={receiveRequest?.qrSleepmask}
-        onClose={() => setModal(null)}
+        label={activeReceiveLabel}
+        qrData={activeReceiveQrData}
+      onClose={() => setModal(null)}
       />
       <TransactionSheet
         visible={modal?.type === 'transaction'}
@@ -493,14 +629,12 @@ function LoginScreen({
   loading,
   error,
   onConnect,
-  onConnectWithEmail,
 }: {
   compact: boolean;
   connectionMethod: string | null;
   loading: boolean;
   error: string | null;
   onConnect: () => void;
-  onConnectWithEmail: () => void;
 }) {
   return (
     <SafeAreaView
@@ -520,17 +654,14 @@ function LoginScreen({
           Votre wallet est prêt en arrière-plan. Simple, privé, immédiat.
         </Text>
         {connectionMethod ? (
-          <Text style={styles.screenSubtext}>Dernière méthode: {connectionMethod}</Text>
+          <Text style={styles.screenSubtext}>Dernière connexion : {connectionMethod}</Text>
         ) : null}
         <View style={styles.authMethods}>
           <PrimaryButton
-            label={loading ? 'Ouverture de Dynamic…' : 'Continuer'}
+            label={loading ? 'Chargement…' : 'Continuer'}
             onPress={onConnect}
+            disabled={loading}
           />
-          <Text style={styles.authHelperText}>
-            Choisissez ensuite votre méthode réelle dans le modal Dynamic:
-            email, wallet externe, passkey ou provider activé côté dashboard.
-          </Text>
         </View>
         {error ? (
           <View style={styles.authErrorCard}>
@@ -538,9 +669,6 @@ function LoginScreen({
             <Text style={styles.authErrorText}>{error}</Text>
           </View>
         ) : null}
-        <Pressable onPress={onConnectWithEmail} style={styles.inlineAction}>
-          <Text style={styles.inlineActionText}>Ouvrir directement le flow email / wallet</Text>
-        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -556,6 +684,7 @@ type HomeTabProps = {
   onToggleBalance: () => void;
   onChangeDepositAmount: (value: string) => void;
   onDeposit: () => void;
+  onRefresh: () => void;
   onOpenPay: () => void;
   onOpenReceive: () => void;
   onOpenProfile: () => void;
@@ -571,6 +700,7 @@ function HomeTab({
   onToggleBalance,
   onChangeDepositAmount,
   onDeposit,
+  onRefresh,
   onOpenPay,
   onOpenReceive,
   onOpenProfile,
@@ -588,6 +718,9 @@ function HomeTab({
           <Text style={styles.eyebrow}>Sleepmask</Text>
           <Text style={styles.headerTitle}>Accueil</Text>
         </View>
+        <Pressable onPress={onRefresh} style={styles.headerAction}>
+          <Text style={styles.headerActionText}>Refresh</Text>
+        </Pressable>
       </View>
 
       <BalanceRevealCard
@@ -604,7 +737,7 @@ function HomeTab({
 
       <SectionBlock
         title="Approvisionner"
-        caption="Déposez des USDC depuis le wallet public Dynamic vers le rail privé Sleepmask."
+        caption="Déposez des USDC depuis votre wallet vers Sleepmask."
       >
         <InputField
           label="Montant à déposer"
@@ -648,14 +781,20 @@ type TransferTabProps = {
   payAmount: string;
   payRecipient: string;
   payLinkInput: string;
+  payEvmAddress: string;
   receiveAmount: string;
   flexibleReceive: boolean;
+  receiveShareMode: ReceiveShareMode;
   receiveQrData?: string;
+  receiveDisplayValue?: string;
+  receiveDisplayLabel: string;
   onChangePayAmount: (value: string) => void;
   onChangePayRecipient: (value: string) => void;
   onChangePayLink: (value: string) => void;
+  onChangePayEvmAddress: (value: string) => void;
   onChangeReceiveAmount: (value: string) => void;
   onToggleFlexibleReceive: (value: boolean) => void;
+  onChangeReceiveShareMode: (value: string) => void;
   onOpenScan: () => void;
   onParsePayLink: () => void;
   onStartPayment: () => void;
@@ -672,14 +811,20 @@ function TransferTab({
   payAmount,
   payRecipient,
   payLinkInput,
+  payEvmAddress,
   receiveAmount,
   flexibleReceive,
+  receiveShareMode,
   receiveQrData,
+  receiveDisplayValue,
+  receiveDisplayLabel,
   onChangePayAmount,
   onChangePayRecipient,
   onChangePayLink,
+  onChangePayEvmAddress,
   onChangeReceiveAmount,
   onToggleFlexibleReceive,
+  onChangeReceiveShareMode,
   onOpenScan,
   onParsePayLink,
   onStartPayment,
@@ -739,6 +884,14 @@ function TransferTab({
               hint="Accepte les liens Sleepmask/Sleepay ouverts depuis un QR ou un site."
             />
 
+            <InputField
+              label="Adresse EVM directe"
+              value={payEvmAddress}
+              onChangeText={onChangePayEvmAddress}
+              placeholder="0x..."
+              hint="Optionnel. Si elle est remplie, le paiement part directement vers ce wallet classique."
+            />
+
             <InfoRail label="Paiement en USDC" />
 
             <InputField
@@ -749,7 +902,7 @@ function TransferTab({
               keyboardType="decimal-pad"
             />
             <InputField
-              label="Tag destinataire"
+              label="Tag local"
               value={payRecipient}
               onChangeText={onChangePayRecipient}
               placeholder="Nom ou repère local"
@@ -763,9 +916,18 @@ function TransferTab({
         <>
           <SectionBlock
             title="Recevoir"
-            caption="Le QR crée une vraie demande de paiement USDC. Vos repères de réception restent locaux au téléphone."
+            caption="Le QR crée une vraie demande de paiement USDC. Vous pouvez partager soit le flux Sleepmask, soit l'adresse one-shot pour wallet classique."
           >
             <InfoRail label="Recevoir en USDC" />
+
+            <SegmentedControl
+              options={[
+                { key: 'sleepmask', label: 'Sleepmask' },
+                { key: 'classic', label: 'Wallet classique' },
+              ]}
+              value={receiveShareMode}
+              onChange={onChangeReceiveShareMode}
+            />
 
             <View style={styles.toggleRow}>
               <ToggleChip
@@ -802,11 +964,20 @@ function TransferTab({
               <Text style={styles.qrTitle}>Scannez pour me payer</Text>
               <Text style={styles.qrText}>
                 {receiveQrData
-                  ? flexibleReceive
+                  ? receiveShareMode === 'classic'
+                    ? 'Adresse one-shot compatible MetaMask et wallet classique.'
+                    : flexibleReceive
                     ? 'Paiement discret en USDC, montant libre.'
                     : `${receiveAmount || '0,00'} USDC · Paiement discret`
                   : 'Génération du QR en cours…'}
               </Text>
+              {receiveDisplayValue ? (
+                <Text style={styles.qrMetaText}>
+                  {receiveDisplayLabel === 'Wallet classique'
+                    ? receiveDisplayValue
+                    : 'Lien Sleepmask prêt à être partagé.'}
+                </Text>
+              ) : null}
             </View>
 
             <View
@@ -817,7 +988,11 @@ function TransferTab({
             >
               <SecondaryButton
                 compact
-                label="Copier le lien"
+                label={
+                  receiveShareMode === 'classic'
+                    ? "Copier l'adresse"
+                    : 'Copier le lien'
+                }
                 onPress={onCopyLink}
               />
               <SecondaryButton compact label="Partager" onPress={onShare} />
@@ -917,6 +1092,7 @@ type FullQrModalProps = {
   compact: boolean;
   visible: boolean;
   amount: string;
+  label: string;
   qrData?: string;
   onClose: () => void;
 };
@@ -925,6 +1101,7 @@ function FullQrModal({
   compact,
   visible,
   amount,
+  label,
   qrData,
   onClose,
 }: FullQrModalProps) {
@@ -943,7 +1120,11 @@ function FullQrModal({
         <View style={styles.fullQrCard}>
           <QrCodeMock size={compact ? 248 : 292} data={qrData} />
           <Text style={styles.fullQrTitle}>Scannez pour me payer</Text>
-          <Text style={styles.fullQrText}>Paiement discret avec Sleepmask</Text>
+          <Text style={styles.fullQrText}>
+            {label === 'Wallet classique'
+              ? 'Adresse one-shot compatible wallet classique'
+              : 'Paiement discret avec Sleepmask'}
+          </Text>
           <Text style={styles.fullQrAmount}>{amount}</Text>
         </View>
       </SafeAreaView>
@@ -954,15 +1135,19 @@ function FullQrModal({
 function PrimaryButton({
   label,
   onPress,
+  disabled,
 }: {
   label: string;
   onPress: () => void;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       style={({ pressed }) => [
         styles.primaryButton,
+        disabled ? styles.buttonDisabled : null,
         pressed ? styles.buttonPressed : null,
       ]}
     >
@@ -1272,8 +1457,76 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   headerRow: {
+    flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  headerAction: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  headerActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  identityBannerWrap: {
+    paddingHorizontal: 18,
+    paddingTop: 16,
+  },
+  identityCard: {
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 18,
+    gap: 14,
+  },
+  identityCardCopy: {
+    gap: 8,
+  },
+  identityCardTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  identityCardText: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.textMuted,
+  },
+  identityCardHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textSubtle,
+  },
+  identityCardFooter: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.textMuted,
+  },
+  identityCardError: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#B42318',
+  },
+  identityInlineNote: {
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  identityInlineText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textMuted,
   },
   headerTitle: {
     marginTop: 6,
@@ -1387,6 +1640,9 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.88,
+  },
+  buttonDisabled: {
+    opacity: 0.56,
   },
   section: {
     borderRadius: radius.lg,
@@ -1603,6 +1859,13 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     textAlign: 'center',
     color: colors.textMuted,
+  },
+  qrMetaText: {
+    marginTop: 10,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.textSubtle,
+    textAlign: 'center',
   },
   twoColumnRow: {
     flexDirection: 'row',

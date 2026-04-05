@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 
 import { createActivityItem, pushActivity } from '../services/activity';
 import { pay, payDirect } from '../services/api';
+import { humanizeError } from '../services/errors';
 
 type PayStatus = 'idle' | 'pending' | 'success' | 'error';
 
@@ -42,7 +43,7 @@ export function usePayment(mnemonic: string | null) {
           status: 'Échoué',
         }),
       );
-      setError(e?.message || 'Paiement échoué');
+      setError(humanizeError(e, 'Paiement échoué'));
       setStatus('error');
     }
   }, [mnemonic]);
@@ -78,7 +79,7 @@ export function usePayment(mnemonic: string | null) {
           status: 'Échoué',
         }),
       );
-      setError(e?.message || 'Paiement échoué');
+      setError(humanizeError(e, 'Paiement échoué'));
       setStatus('error');
     }
   }, [mnemonic]);

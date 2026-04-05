@@ -1,3 +1,9 @@
+import { Buffer } from 'buffer';
+
+if (typeof globalThis !== 'undefined' && !globalThis.Buffer) {
+  globalThis.Buffer = Buffer;
+}
+
 // Stub browser globals needed by @dynamic-labs/sdk-react-core (web-only SDK)
 if (typeof window !== 'undefined') {
   if (!window.location) {
@@ -67,4 +73,8 @@ if (typeof global !== 'undefined' && !global.document) {
     body: { appendChild: () => {}, removeChild: () => {}, style: {} },
     head: { appendChild: () => {}, removeChild: () => {} },
   };
+}
+
+if (typeof global !== 'undefined' && !global.Buffer) {
+  global.Buffer = Buffer;
 }

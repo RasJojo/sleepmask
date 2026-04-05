@@ -1,5 +1,6 @@
 package com.mobile
 
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import com.facebook.react.ReactActivity
@@ -32,6 +33,11 @@ class MainActivity : ReactActivity() {
         BuildConfig.IS_NEW_ARCHITECTURE_ENABLED,
         object : DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled) {},
       )
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+  }
 
   override fun invokeDefaultOnBackPressed() {
     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) {
